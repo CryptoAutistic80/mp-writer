@@ -1,0 +1,140 @@
+.section {
+  padding: 4rem 1rem;
+  max-width: 600px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.hero {
+  padding-top: 6rem;
+}
+
+.headline {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: #003078;
+  margin-bottom: 1rem;
+}
+
+.subheadline {
+  font-size: 1.125rem;
+  color: #111827;
+  margin-bottom: 2rem;
+}
+
+.googleButton {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #111827;
+  font-weight: 600;
+  font-size: 1rem;
+  text-decoration: none;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  cursor: pointer;
+}
+
+.trust {
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin-top: 0.5rem;
+}
+
+.steps {
+  margin-top: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  text-align: left;
+  gap: 1rem;
+}
+
+.stepIcon {
+  width: 2rem;
+  height: 2rem;
+  font-size: 2rem;
+  line-height: 2rem;
+  flex-shrink: 0;
+}
+
+.stepTitle {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.stepText {
+  font-size: 0.875rem;
+  color: #4b5563;
+}
+
+.brandStory p {
+  font-size: 1rem;
+  line-height: 1.5rem;
+  color: #111827;
+}
+
+.screenshot {
+  margin-top: 2rem;
+  display: flex;
+  justify-content: center;
+}
+
+.phoneMock {
+  border: 1px solid #e5e7eb;
+  border-radius: 1.5rem;
+  padding: 0.5rem;
+  background: #fff;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.payment p {
+  font-size: 1rem;
+  color: #111827;
+}
+
+.payment img {
+  margin-top: 0.5rem;
+  height: 20px;
+}
+
+.footer {
+  font-size: 0.875rem;
+  color: #6b7280;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 2rem 1rem;
+}
+
+.footerLinks {
+  display: flex;
+  gap: 1rem;
+}
+
+.stickyCta {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 2rem);
+  max-width: 600px;
+}
+
+.googleButtonAvatar {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 9999px;
+  background: #e5e7eb;
+}
