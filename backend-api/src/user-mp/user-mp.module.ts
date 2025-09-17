@@ -8,6 +8,7 @@ import { UserMpController } from './user-mp.controller';
   imports: [MongooseModule.forFeature([{ name: UserMp.name, schema: UserMpSchema }])],
   providers: [UserMpService],
   controllers: [UserMpController],
+  exports: [UserMpService],
 })
 export class UserMpModule {}
 
