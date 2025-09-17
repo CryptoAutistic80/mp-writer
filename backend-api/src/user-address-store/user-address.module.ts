@@ -13,6 +13,7 @@ import { EncryptionService } from '../crypto/encryption.service';
   ],
   controllers: [UserAddressController],
   providers: [UserAddressService, EncryptionService],
+  exports: [UserAddressService],
 })
 export class UserAddressModule {}
 

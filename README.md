@@ -15,6 +15,7 @@ Environment
 - `APP_ORIGIN`: frontend origin for CORS (e.g., `http://localhost:3000`)
 - Google OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
 - OpenAI: `OPENAI_API_KEY` (optional in dev), `OPENAI_MODEL` (default `gpt-4o-mini`)
+- Writing desk AI: `OPENAI_REFINEMENT_MODEL` (default `gpt-4o-mini`), `OPENAI_RESEARCH_MODEL` (default `o4-mini`), `RESEARCH_TIMEOUT_MS` (default `180000`)
 
 Notes
 - Backend uses `ConfigModule` and `MongooseModule.forRootAsync` with global `ValidationPipe`.
@@ -34,6 +35,11 @@ Auth & API (Backend)
 - Current user: `GET /api/auth/me` (Authorization: `Bearer <token>`)
 - Purchases: `GET /api/purchases`, `POST /api/purchases`, `GET /api/purchases/:id`
 - OpenAI: `POST /api/ai/generate` (Authorization required)
+- Writing sessions:
+  - `POST /api/writing-sessions` — refine a new issue brief into a session.
+  - `GET /api/writing-sessions` — list your most recent sessions.
+  - `GET /api/writing-sessions/:id` — fetch the status and outputs for a session.
+  - `POST /api/writing-sessions/:id/research` — spend one credit to run deep research and draft the letter.
 
 Persisting a User's MP
 - Model: separate collection `user_mps` keyed by `user` (ObjectId). See `backend-api/src/user-mp/schemas/user-mp.schema.ts`.
