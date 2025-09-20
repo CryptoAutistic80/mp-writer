@@ -1064,6 +1064,23 @@ body {
   border-color: var(--blue);
   box-shadow: 0 0 0 3px var(--ring);
 }
+.textarea {
+  appearance: none;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px;
+  font: inherit;
+  color: var(--ink);
+  background: #fff;
+  line-height: 1.5;
+  min-height: 140px;
+  resize: vertical;
+}
+.textarea:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--ring);
+}
 .select {
   appearance: none;
   border: 1px solid #e5e7eb;
@@ -1352,4 +1369,204 @@ body {
 .mp-meta {
   color: var(--ink-600);
   margin-top: 2px;
+}
+
+/* Writing desk */
+.writing-desk .writing-header {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.writing-context {
+  font-size: 0.95rem;
+  color: var(--ink-600);
+}
+
+.writing-context p {
+  margin: 4px 0;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: var(--blue);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}
+
+.link-button:hover,
+.link-button:focus {
+  text-decoration: underline;
+}
+
+.writing-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid #cbd5f5;
+  background: #eef2ff;
+  color: var(--blue);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-secondary:hover {
+  filter: brightness(0.97);
+}
+
+.btn-tertiary {
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-600);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-tertiary:hover {
+  color: var(--blue);
+}
+
+.step-indicator {
+  font-weight: 600;
+  color: var(--ink-600);
+}
+
+.tone-options {
+  display: grid;
+  gap: 12px;
+}
+
+.tone-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  display: grid;
+  gap: 4px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.tone-card input {
+  display: none;
+}
+
+.tone-card.selected {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.tone-label {
+  font-weight: 700;
+}
+
+.tone-description {
+  color: var(--ink-600);
+  font-size: 0.95rem;
+}
+
+.review-card dl {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.review-item {
+  display: grid;
+  gap: 4px;
+}
+
+.review-card dt {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.review-card dd {
+  margin: 0;
+  color: var(--ink-600);
+}
+
+.letter-container {
+  display: grid;
+  gap: 16px;
+}
+
+.letter-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.letter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.letter-output {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  padding: 20px;
+  color: var(--ink);
+  line-height: 1.6;
+  box-shadow: inset 0 0 0 1px rgba(2, 8, 23, 0.02);
+}
+
+.letter-output p {
+  margin: 0 0 12px;
+}
+
+.letter-footer {
+  font-size: 0.95rem;
+  color: var(--ink-600);
+}
+
+.error-text {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.notice-text {
+  color: var(--blue);
+  font-weight: 600;
+}
+
+@media (min-width: 768px) {
+  .writing-desk .writing-header {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  .tone-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .letter-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
 }
