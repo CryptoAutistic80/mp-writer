@@ -11,6 +11,8 @@ export default function DashboardPage() {
   const [sharedPostcode, setSharedPostcode] = useState('');
   const [firstName, setFirstName] = useState('User');
   const [credits, setCredits] = useState(0);
+  const [purchaseStatus, setPurchaseStatus] = useState<string | null>(null);
+  const [purchaseStatusType, setPurchaseStatusType] = useState<'success' | 'error' | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,24 +35,44 @@ export default function DashboardPage() {
     };
   }, []);
 
-  async function handleCreditShopClick() {
+  async function handleCreditShopClick(planId: string) {
+    if (!planId) return;
+    setPurchaseStatus(null);
+    setPurchaseStatusType(null);
     try {
-      const res = await fetch('/api/user/credits/add', {
+      const res = await fetch('/api/purchases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: 1 }),
+        body: JSON.stringify({ plan: planId }),
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        const text = await res.text();
+        setPurchaseStatus(text || 'Unable to complete purchase. Please try again.');
+        setPurchaseStatusType('error');
+        return;
+      }
       const data = await res.json();
-      if (typeof data?.credits === 'number') setCredits(data.credits);
-    } catch {
-      // ignore temporary demo errors
+      if (typeof data?.credits === 'number') {
+        setCredits(data.credits);
+        setPurchaseStatus('Credits added to your account.');
+        setPurchaseStatusType('success');
+      }
+    } catch (error) {
+      setPurchaseStatus('Unable to connect to the server. Please try again.');
+      setPurchaseStatusType('error');
     }
   }
 
   return (
     <main className="hero-section">
       <DashboardWelcome firstName={firstName} credits={credits} onAddCredit={handleCreditShopClick} />
+      {purchaseStatus && (
+        <section className="card" style={{ marginTop: 8 }}>
+          <div className="container" role="status" aria-live="polite">
+            <p className={purchaseStatusType === 'success' ? 'notice-text' : 'error-text'}>{purchaseStatus}</p>
+          </div>
+        </section>
+      )}
       <section className="card" style={{ marginTop: 16 }}>
         <MpFetch onPostcodeChange={setSharedPostcode} />
       </section>

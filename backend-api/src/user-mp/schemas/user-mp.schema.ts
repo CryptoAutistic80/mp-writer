@@ -7,7 +7,7 @@ export type UserMpDocument = HydratedDocument<UserMp>;
 export class UserMp {
   _id!: string;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   user!: string;
 
   @Prop({ required: true })
@@ -29,4 +29,3 @@ export class UserMp {
 
 export const UserMpSchema = SchemaFactory.createForClass(UserMp);
 UserMpSchema.index({ user: 1 }, { unique: true });
-

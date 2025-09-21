@@ -7,7 +7,7 @@ export type UserAddressDocument = HydratedDocument<UserAddress>;
 export class UserAddress {
   _id!: string;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   user!: string;
 
   @Prop({ required: true })
@@ -16,4 +16,3 @@ export class UserAddress {
 
 export const UserAddressSchema = SchemaFactory.createForClass(UserAddress);
 UserAddressSchema.index({ user: 1 }, { unique: true });
-
