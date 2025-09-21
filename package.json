@@ -29,6 +29,7 @@
     "@types/passport-google-oauth20": "^2.0.14",
     "@types/react": "19.0.0",
     "@types/react-dom": "19.0.0",
+    "@types/three": "^0.180.0",
     "nx": "21.4.1",
     "prettier": "^2.6.2",
     "three": "^0.150.1",

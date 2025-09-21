@@ -14,13 +14,16 @@ Environment
 - `JWT_SECRET`: required for JWT issuance
 - `APP_ORIGIN`: frontend origin for CORS (e.g., `http://localhost:3000`)
 - Google OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
-- OpenAI: `OPENAI_API_KEY` (optional in dev), `OPENAI_MODEL` (default `gpt-4o-mini`)
+- OpenAI: `OPENAI_API_KEY` (optional in dev), `OPENAI_MODEL` (default `o4-mini-deep-research`),
+  `OPENAI_DEEP_RESEARCH_TIMEOUT_MS` (optional override, default 7 minutes),
+  `OPENAI_DEEP_RESEARCH_POLL_INTERVAL_MS` (optional override, default 5 seconds)
 
 Notes
 - Backend uses `ConfigModule` and `MongooseModule.forRootAsync` with global `ValidationPipe`.
 - Shared Nest modules live in `libs/nest-modules` for future features (auth, users, etc.).
 - Security: `helmet` enabled and CORS configured to `APP_ORIGIN`.
 - Rate limit: `@nestjs/throttler` at 60 req/min per IP.
+- AI generation calls the OpenAI Deep Research flow (web search preview). If your account lacks access to deep research models, set `OPENAI_MODEL` to one you can use.
 
 Readiness & Health
 - `/api/health`: Nest Terminus endpoint reports Mongo connectivity.

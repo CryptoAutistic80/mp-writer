@@ -413,6 +413,8 @@ summary svg {
 :root {
   --bg: #0b1020;
   --ink: #0f172a; /* slate-900 */
+  --ink-700: #334155;
+  --ink-500: #64748b;
   --ink-600: #475569;
   --muted: #64748b; /* slate-500 */
   --panel: #ffffff;
@@ -1553,6 +1555,38 @@ body {
   font-weight: 600;
 }
 
+.deep-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.deep-progress-message {
+  font-weight: 600;
+  color: var(--ink-700);
+}
+
+.deep-progress-meter {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 9999px;
+  height: 0.65rem;
+  overflow: hidden;
+  position: relative;
+}
+
+.deep-progress-meter span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #0ea5e9);
+  transition: width 0.8s ease;
+}
+
+.deep-progress-hint {
+  color: var(--ink-500);
+  font-size: 0.9rem;
+}
 @media (min-width: 768px) {
   .writing-desk .writing-header {
     flex-direction: row;

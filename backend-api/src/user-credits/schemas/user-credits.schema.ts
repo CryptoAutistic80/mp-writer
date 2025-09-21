@@ -7,7 +7,7 @@ export type UserCreditsDocument = HydratedDocument<UserCredits>;
 export class UserCredits {
   _id!: string;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   user!: string;
 
   @Prop({ required: true, default: 0 })
@@ -16,4 +16,3 @@ export class UserCredits {
 
 export const UserCreditsSchema = SchemaFactory.createForClass(UserCredits);
 UserCreditsSchema.index({ user: 1 }, { unique: true });
-

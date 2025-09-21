@@ -44,11 +44,6 @@ export default function WritingDeskClient() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function apiPath(path: string) {
-    const normalized = path.startsWith('/') ? path : `/${path}`;
-    return `/api${normalized}`.replace('//', '/');
-  }
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -198,7 +193,7 @@ export default function WritingDeskClient() {
 
   async function pollJob(jobId: string) {
     try {
-      const res = await fetch(apiPath(`/ai/generate/${jobId}`), {
+      const res = await fetch(`/api/ai/generate/${jobId}`, {
         credentials: 'include',
       });
 
@@ -275,7 +270,7 @@ export default function WritingDeskClient() {
         answer: answers[question.id]?.trim() || 'Not specified.',
       }));
 
-      const res = await fetch(apiPath('/ai/generate'), {
+      const res = await fetch('/api/ai/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
