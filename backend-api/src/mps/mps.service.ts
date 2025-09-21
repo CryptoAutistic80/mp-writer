@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 type LookupResult = {
   constituency: string;
@@ -17,8 +17,15 @@ type LookupResult = {
 
 @Injectable()
 export class MpsService {
+  private readonly logger = new Logger(MpsService.name);
+
   private normalizePostcode(input: string): string {
     return input.replace(/\s+/g, '').toUpperCase();
+  }
+
+  private logLookupFailure(stage: string, error: unknown): void {
+    const suffix = error instanceof Error ? error.message : String(error);
+    this.logger.debug(`${stage} lookup failed: ${suffix}`);
   }
 
   async lookupByPostcode(postcodeRaw: string): Promise<LookupResult> {
@@ -71,7 +78,9 @@ export class MpsService {
           }
         }
       }
-    } catch {}
+    } catch (error) {
+      this.logLookupFailure('constituency metadata', error);
+    }
 
     // 2b) Direct constituency search (exact match only)
     if (!mpData) {
@@ -93,7 +102,9 @@ export class MpsService {
           });
           mpData = (match?.value ?? match) || null;
         }
-      } catch {}
+      } catch (error) {
+        this.logLookupFailure('constituency match', error);
+      }
     }
 
     // 2c) Fetch all current members and filter by constituency name
@@ -117,7 +128,9 @@ export class MpsService {
             mpData = (match?.value ?? match) || null;
           }
         }
-      } catch {}
+      } catch (error) {
+        this.logLookupFailure('members list', error);
+      }
     }
 
     let mp: LookupResult['mp'] = null;

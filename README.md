@@ -16,7 +16,12 @@ Environment
 - Google OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
 - OpenAI: `OPENAI_API_KEY` (optional in dev), `OPENAI_MODEL` (default `o4-mini-deep-research`),
   `OPENAI_DEEP_RESEARCH_TIMEOUT_MS` (optional override, default 7 minutes),
-  `OPENAI_DEEP_RESEARCH_POLL_INTERVAL_MS` (optional override, default 5 seconds)
+  `OPENAI_DEEP_RESEARCH_POLL_INTERVAL_MS` (optional override, default 5 seconds),
+  `OPENAI_DEEP_RESEARCH_ENABLE_WEB_SEARCH` (toggle web search tool; default `true`),
+  `OPENAI_DEEP_RESEARCH_WEB_SEARCH_CONTEXT_SIZE` (`small` | `medium` | `large`, default `medium`),
+  `OPENAI_DEEP_RESEARCH_VECTOR_STORE_IDS` (comma-separated IDs for at most two vector stores),
+  `OPENAI_DEEP_RESEARCH_ENABLE_CODE_INTERPRETER` (enable the code interpreter tool for research),
+  `OPENAI_DEEP_RESEARCH_MAX_TOOL_CALLS` (positive integer cap on tool invocations during research)
 
 Notes
 - Backend uses `ConfigModule` and `MongooseModule.forRootAsync` with global `ValidationPipe`.
@@ -24,6 +29,7 @@ Notes
 - Security: `helmet` enabled and CORS configured to `APP_ORIGIN`.
 - Rate limit: `@nestjs/throttler` at 60 req/min per IP.
 - AI generation calls the OpenAI Deep Research flow (web search preview). If your account lacks access to deep research models, set `OPENAI_MODEL` to one you can use.
+- Deep research configuration mirrors the tooling guidance from the OpenAI Cookbook deep research examples (web search, optional vector stores, optional code interpreter, max tool calls).
 
 Readiness & Health
 - `/api/health`: Nest Terminus endpoint reports Mongo connectivity.
