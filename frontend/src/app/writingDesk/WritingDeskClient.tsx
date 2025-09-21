@@ -1,7 +1,8 @@
 "use client";
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import DeepResearchProgress from '../../components/DeepResearchProgress';
 
 const QUESTIONS: { id: string; prompt: string }[] = [
   { id: 'who', prompt: 'Who is most affected by this issue?' },
@@ -39,6 +40,14 @@ export default function WritingDeskClient() {
   const [context, setContext] = useState<UserContext | null>(null);
   const [contextMessage, setContextMessage] = useState<string>('Loading your saved details…');
   const [notice, setNotice] = useState<string | null>(null);
+  const [jobMessage, setJobMessage] = useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function apiPath(path: string) {
+    const normalized = path.startsWith('/') ? path : `/${path}`;
+    return `/api${normalized}`.replace('//', '/');
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -92,6 +101,14 @@ export default function WritingDeskClient() {
     })();
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -172,23 +189,96 @@ export default function WritingDeskClient() {
     }
   }
 
+  function clearJobPolling() {
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+  }
+
+  async function pollJob(jobId: string) {
+    try {
+      const res = await fetch(apiPath(`/ai/generate/${jobId}`), {
+        credentials: 'include',
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to fetch job status');
+      }
+
+      const data = await res.json();
+
+      if (typeof data?.credits === 'number') {
+        setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
+      }
+
+      if (typeof data?.message === 'string') {
+        setJobMessage(data.message);
+      }
+
+      if (data?.status === 'completed' && typeof data?.content === 'string') {
+        clearJobPolling();
+        setLetter(data.content.trim());
+        setPhase('result');
+        setIsGenerating(false);
+        setActiveJobId(null);
+        setJobMessage(null);
+        return;
+      }
+
+      if (data?.status === 'failed') {
+        clearJobPolling();
+        setError(data?.error || 'The AI service was unable to draft your letter just now.');
+        setIsGenerating(false);
+        setActiveJobId(null);
+        setJobMessage(null);
+        return;
+      }
+
+      pollTimeoutRef.current = setTimeout(() => {
+        pollJob(jobId).catch(() => {
+          clearJobPolling();
+          setError('We could not connect to the AI service. Please try again shortly.');
+          setIsGenerating(false);
+          setActiveJobId(null);
+          setJobMessage(null);
+        });
+      }, 5000);
+    } catch (err) {
+      clearJobPolling();
+      setError('We could not connect to the AI service. Please try again shortly.');
+      setIsGenerating(false);
+      setActiveJobId(null);
+      setJobMessage(null);
+    }
+  }
+
   async function handleGenerate() {
     if (!context) {
       setError('Please sign in and set up your details first.');
       return;
     }
+
+    if (activeJobId) {
+      clearJobPolling();
+      setActiveJobId(null);
+    }
+
     setIsGenerating(true);
     setError(null);
     setNotice(null);
     setLetter(null);
+    setJobMessage('Submitting your deep research request…');
     try {
       const details = QUESTIONS.map((question) => ({
         question: question.prompt,
         answer: answers[question.id]?.trim() || 'Not specified.',
       }));
-      const res = await fetch('/api/ai/generate', {
+
+      const res = await fetch(apiPath('/ai/generate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           prompt: issue,
           tone,
@@ -199,27 +289,49 @@ export default function WritingDeskClient() {
           userAddressLine: context.addressLine,
         }),
       });
-      if (!res.ok) {
-        const message = res.status === 400 || res.status === 402
-          ? 'You need at least one credit to generate a letter.'
-          : 'The AI service was unable to draft your letter just now.';
-        setError(message);
+
+      if (res.status === 400 || res.status === 402) {
+        setIsGenerating(false);
+        setJobMessage(null);
+        setError('You need at least one credit to generate a letter.');
         return;
       }
+
+      if (!res.ok) {
+        setIsGenerating(false);
+        setJobMessage(null);
+        setError('The AI service was unable to draft your letter just now.');
+        return;
+      }
+
       const data = await res.json();
+
       if (typeof data?.credits === 'number') {
         setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
       }
-      if (typeof data?.content === 'string') {
-        setLetter(data.content.trim());
-        setPhase('result');
-      } else {
-        setError('We did not receive a draft. Please try again.');
+
+      if (typeof data?.message === 'string') {
+        setJobMessage(data.message);
       }
+
+      if (typeof data?.jobId !== 'string' || !data.jobId) {
+        throw new Error('Deep research job identifier missing in response.');
+      }
+
+      setActiveJobId(data.jobId);
+      pollJob(data.jobId).catch(() => {
+        clearJobPolling();
+        setError('We could not connect to the AI service. Please try again shortly.');
+        setIsGenerating(false);
+        setActiveJobId(null);
+        setJobMessage(null);
+      });
     } catch (err) {
+      clearJobPolling();
       setError('We could not connect to the AI service. Please try again shortly.');
-    } finally {
       setIsGenerating(false);
+      setActiveJobId(null);
+      setJobMessage(null);
     }
   }
 
@@ -429,6 +541,13 @@ export default function WritingDeskClient() {
         </section>
       )}
 
+      {isGenerating && (
+        <section className="card" aria-live="polite">
+          <div className="container">
+            <DeepResearchProgress active={isGenerating} messageOverride={jobMessage} />
+          </div>
+        </section>
+      )}
       {notice && (
         <section className="card" aria-live="polite">
           <div className="container">
