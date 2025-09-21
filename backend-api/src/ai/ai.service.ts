@@ -12,7 +12,9 @@ import { UserAddressService } from '../user-address-store/user-address.service';
 
 const DEFAULT_MODEL = 'o4-mini-deep-research';
 const DEFAULT_POLL_INTERVAL_MS = 5000;
-const DEFAULT_TIMEOUT_MS = 420000; // 7 minutes to allow multi-step research
+// Default time budget for a deep research run. Some investigations can take
+// longer, so we also support a single automatic extension (see loop below).
+const DEFAULT_TIMEOUT_MS = 900000; // 15 minutes
 const JOB_CLEANUP_MS = 10 * 60 * 1000;
 const FAILED_JOB_CLEANUP_MS = 5 * 60 * 1000;
 
@@ -254,11 +256,11 @@ export class AiService {
       ? `Additional background details provided by the user:\n${detailLines}`
       : 'No additional background details were provided beyond the issue summary.';
 
-    const systemInstructions = `You are MP Writer, an assistant who performs multi-step deep research to draft fact-checked constituency letters for UK residents.\nOperating Principles:\n- Run thorough research before writing. Prioritise recent information (ideally within the last 3 years) from official UK government, Parliament, reputable NGOs, or mainstream journalism with transparent sourcing.\n- Never invent facts. If information cannot be found, state the limitation briefly rather than speculating.\n- When citing statistics or statements, capture the publication date or most recent datapoint in the reference list.\n- Provide inline citations using numbered markers like [1], [2] that map to a reference section.\n- References must include: title, source/organisation, year (if available), and a direct URL the constituent can share.\n- Keep the final letter under 500 words, written in clear UK English, respectful yet persuasive.\n- Include a short bulleted action list inside the letter outlining concrete requests for the MP.\n- Return the answer as polished Markdown paragraphs followed by a "References" heading with the numbered sources.`;
+    const systemInstructions = `You are MP Writer, an assistant who performs multi-step deep research to draft fact-checked constituency letters for UK residents.\nOperating Principles:\n- Run thorough research before writing. Prioritise recent information (ideally within the last 3 years) from official UK government, Parliament, reputable NGOs, or mainstream journalism with transparent sourcing.\n- Never invent facts. If information cannot be found, state the limitation briefly rather than speculating.\n- When citing statistics or statements, capture the publication date or most recent datapoint in the reference list.\n- Provide inline citations using numbered markers like [1], [2] that map to a reference section.\n- References must include: title, source/organisation, year (if available), and a direct URL the constituent can share.\n- Keep the final letter under 500 words, written in clear UK English, respectful yet persuasive.\n- Include a short bulleted action list inside the letter outlining concrete requests for the MP.\n- Output format MUST be HTML (no Markdown, no code fences).`;
 
     const researchExpectations = `Research objectives:\n1. Understand the constituent's issue and the outcomes they want.\n2. Identify relevant UK policies, legislation, votes, or programmes the MP can influence.\n3. Gather recent statistics, official statements, or expert findings that strengthen the case.\n4. Surface any timelines, upcoming debates, or consultations the MP should note.`;
 
-    const outputExpectations = `Output requirements:\n- Compose the complete letter within 500 words.\n- Keep the tone ${tone ? tone.toLowerCase() : 'respectful and persuasive'}.\n- Weave evidence-backed arguments that align with the constituent's goals.\n- Present a bulleted list of specific actions for the MP.\n- After the signature, add a "References" section with entries formatted as: [n] Title — Source (Year). URL`;
+    const outputExpectations = `Output requirements:\n- Compose the complete letter within 500 words.\n- Keep the tone ${tone ? tone.toLowerCase() : 'respectful and persuasive'}.\n- Weave evidence-backed arguments that align with the constituent's goals.\n- Present a bulleted list of specific actions for the MP.\n- Return valid HTML only, with semantic tags and no surrounding <html> or <body>.\n- Structure:\n  <div class=\"letter\">\n    <p>Sender address</p>\n    <p>MP greeting</p>\n    <p>Letter body with inline citation numbers like [1]</p>\n    <ul>Bullet actions for the MP</ul>\n    <p>Closing and signature</p>\n    <h3>References</h3>\n    <ol>\n      <li><a href=\"URL\" rel=\"noopener noreferrer\">Title — Source (Year)</a></li>\n    </ol>\n  </div>`;
 
     const userPrompt = `${audienceLine}\n${senderLine}\n${toneInstruction}\n\n${researchExpectations}\n\nIssue summary from the constituent:\n${input.prompt.trim()}\n\n${supportingDetailBlock}\n\n${outputExpectations}\n\nUsing the guidance above, research thoroughly and draft the full letter with inline citations and the required reference list.`;
 
@@ -269,6 +271,9 @@ export class AiService {
 
     const pollIntervalInput = this.config.get<string>('OPENAI_DEEP_RESEARCH_POLL_INTERVAL_MS');
     const timeoutInput = this.config.get<string>('OPENAI_DEEP_RESEARCH_TIMEOUT_MS');
+    const timeoutExtensionInput = this.config.get<string>(
+      'OPENAI_DEEP_RESEARCH_TIMEOUT_EXTENSION_MS',
+    );
 
     const pollIntervalCandidate = Number(pollIntervalInput ?? DEFAULT_POLL_INTERVAL_MS);
     const timeoutCandidate = Number(timeoutInput ?? DEFAULT_TIMEOUT_MS);
@@ -276,12 +281,16 @@ export class AiService {
     const pollIntervalMs = Number.isFinite(pollIntervalCandidate) && pollIntervalCandidate > 0
       ? pollIntervalCandidate
       : DEFAULT_POLL_INTERVAL_MS;
-    const timeoutMs = Number.isFinite(timeoutCandidate) && timeoutCandidate > 0
+    let timeBudgetMs = Number.isFinite(timeoutCandidate) && timeoutCandidate > 0
       ? timeoutCandidate
       : DEFAULT_TIMEOUT_MS;
+    const extensionCandidate = Number(timeoutExtensionInput ?? 300000);
+    const extensionMs =
+      Number.isFinite(extensionCandidate) && extensionCandidate > 0 ? extensionCandidate : 300000; // +5 min default
+    let extendedOnce = false;
 
     const { default: OpenAI } = await import('openai');
-    const client = new OpenAI({ apiKey, timeout: timeoutMs + 60000 });
+    const client = new OpenAI({ apiKey, timeout: timeBudgetMs + 60000 });
 
     const tooling = this.buildToolingConfiguration(usingDeepResearchModel);
 
@@ -329,7 +338,15 @@ export class AiService {
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
     while (!terminalStatuses.includes((latest as any).status as ResponseStatus)) {
-      if (Date.now() - start > timeoutMs) {
+      if (Date.now() - start > timeBudgetMs) {
+        if (!extendedOnce) {
+          extendedOnce = true;
+          timeBudgetMs += extensionMs;
+          this.updateJob(job, {
+            message: 'Still researching… taking longer than usual. Extending time limit.',
+          });
+          continue;
+        }
         throw new Error('Deep research timed out before completion. Please try again.');
       }
       await sleep(pollIntervalMs);
