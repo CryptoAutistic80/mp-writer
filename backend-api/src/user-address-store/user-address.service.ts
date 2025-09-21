@@ -23,7 +23,7 @@ export class UserAddressService {
     try {
       const address = this.enc.decryptObject<any>(doc.ciphertext);
       return { address };
-    } catch (e) {
+    } catch (_error) {
       // If decryption fails, treat as no data (could also surface an error)
       return { address: null };
     }
