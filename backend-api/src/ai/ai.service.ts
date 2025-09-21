@@ -302,7 +302,8 @@ export class AiService {
     }
 
     if (typeof tooling.maxToolCalls === 'number') {
-      responseParams.max_tool_calls = tooling.maxToolCalls;
+      (responseParams as ResponseCreateParamsNonStreaming & { max_tool_calls?: number }).max_tool_calls =
+        tooling.maxToolCalls;
     }
 
     if (!usingDeepResearchModel) {
