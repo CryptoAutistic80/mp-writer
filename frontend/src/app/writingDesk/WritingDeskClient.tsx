@@ -397,6 +397,61 @@ export default function WritingDeskClient() {
   // Convert inline long links in the body into numbered [n] citations
   // that link down to the References list, which remains expanded.
   function enhanceCitations(html: string): string {
+    // NEW: Strip inline citations/links from the body while preserving
+    // the clickable References list at the bottom.
+    {
+      const root2 = document.createElement('div');
+      root2.innerHTML = html;
+
+      const heading2 = Array.from(root2.querySelectorAll('h1,h2,h3,h4,h5,h6')).find((h) =>
+        /^references\b/i.test((h.textContent || '').trim()),
+      );
+      const refsList2 = heading2
+        ? (heading2.nextElementSibling && /^(ol|ul)$/i.test(heading2.nextElementSibling.tagName)
+            ? (heading2.nextElementSibling as HTMLOListElement | HTMLUListElement)
+            : (heading2.parentElement?.querySelector('ol,ul') as HTMLOListElement | HTMLUListElement | null))
+        : null;
+
+      const until2 = refsList2 as Node | null;
+      const walker2 = document.createTreeWalker(root2, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+      let node2: Node | null = walker2.nextNode();
+      const urlLike2 = /^(?:https?:\/\/|www\.)/i;
+
+      while (node2 && node2 !== until2) {
+        if (node2.nodeType === Node.ELEMENT_NODE) {
+          const el = node2 as Element;
+          if (until2 && el === until2) break;
+          if (el.matches('a[href]')) {
+            const a = el as HTMLAnchorElement;
+            // Remove the anchor entirely from the body
+            a.replaceWith(document.createTextNode(''));
+          }
+        }
+
+        if (node2 && node2.nodeType === Node.TEXT_NODE && (node2.parentElement && (!until2 || !until2.contains(node2)))) {
+          let text = node2.textContent || '';
+          const domainPart = String.raw`(?:https?:\/\/|www\.)[a-z0-9.-]+\.[a-z]{2,}(?:\/[\w\-./%?#=&+]*)?`;
+          const parenWithUrl = new RegExp(String.raw`\(\s*(?:\[)?${domainPart}(?:\])?(?:\s*\[[0-9]+\])?\s*\)`, 'gi');
+          text = text.replace(parenWithUrl, '');
+          // Remove parenthetical Markdown links entirely: ([label](https://...))
+          text = text.replace(/\(\s*\[[^\]]+\]\(https?:\/\/[^)\s]+\)\s*\)/gi, '');
+          // Remove any inline Markdown links: [label](https://...)
+          text = text.replace(/\[[^\]]+\]\(https?:\/\/[^)\s]+\)/gi, '');
+          // Remove bracketed bare domains: [www.example.com] or [https://...]
+          text = text.replace(/\[(?:https?:\/\/|www\.)[^\]]+\]/gi, '');
+          text = text.replace(/\s*\[[0-9]+\]/g, '');
+          text = text.replace(/\s{2,}/g, ' ');
+          if (text !== (node2.textContent || '')) node2.textContent = text;
+        }
+
+        node2 = walker2.nextNode();
+      }
+
+      let output2 = root2.innerHTML;
+      output2 = output2.replace(/\(\s*\)/g, '');
+      output2 = output2.replace(/\s{2,}/g, ' ');
+      return output2;
+    }
     const root = document.createElement('div');
     root.innerHTML = html;
 
