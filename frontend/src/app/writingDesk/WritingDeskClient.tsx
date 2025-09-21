@@ -439,7 +439,9 @@ export default function WritingDeskClient() {
           text = text.replace(/\[[^\]]+\]\(https?:\/\/[^)\s]+\)/gi, '');
           // Remove bracketed bare domains: [www.example.com] or [https://...]
           text = text.replace(/\[(?:https?:\/\/|www\.)[^\]]+\]/gi, '');
-          text = text.replace(/\s*\[[0-9]+\]/g, '');
+          // Remove [n] style citation markers (allowing spaces and NBSP inside)
+          const citeNum = /(?:\s|\u00A0)*\[\s*\d+\s*\](?:[,.;:])?/g;
+          text = text.replace(citeNum, '');
           text = text.replace(/\s{2,}/g, ' ');
           if (text !== (node2.textContent || '')) node2.textContent = text;
         }
