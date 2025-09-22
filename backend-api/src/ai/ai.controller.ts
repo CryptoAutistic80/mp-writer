@@ -32,6 +32,11 @@ export class AiController {
     });
   }
 
+  @Get('generate')
+  async getActiveJob(@Req() req: any) {
+    return this.ai.getActiveJob(req.user.id);
+  }
+
   @Get('generate/:jobId')
   async getJob(@Req() req: any, @Param('jobId') jobId: string) {
     return this.ai.getJob(jobId, req.user.id);

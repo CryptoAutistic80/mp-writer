@@ -28,6 +28,30 @@ type UserContext = {
   addressLine: string;
 };
 
+type JobStatus = 'queued' | 'in_progress' | 'completed' | 'failed';
+
+type JobPayloadSnapshot = {
+  prompt?: string;
+  tone?: string;
+  model?: string;
+  details?: { question: string; answer: string }[];
+  mpName?: string;
+  constituency?: string;
+  userName?: string;
+  userAddressLine?: string;
+};
+
+type JobSnapshot = {
+  jobId?: string;
+  status?: JobStatus;
+  message?: string;
+  credits?: number;
+  updatedAt?: number;
+  content?: string;
+  error?: string;
+  payload?: JobPayloadSnapshot;
+};
+
 export default function WritingDeskClient() {
   const [phase, setPhase] = useState<Phase>('issue');
   const [issue, setIssue] = useState('');
@@ -89,6 +113,38 @@ export default function WritingDeskClient() {
             addressLine,
           });
           setContextMessage('');
+        }
+
+        if (!cancelled) {
+          try {
+            const jobRes = await fetch('/api/ai/generate', {
+              credentials: 'include',
+              cache: 'no-store',
+            });
+            if (cancelled) return;
+            if (jobRes.ok) {
+              const jobData: JobSnapshot = await jobRes.json().catch(() => null);
+              if (cancelled) return;
+              const status = handleJobSnapshot(jobData);
+              if (
+                status &&
+                (status === 'queued' || status === 'in_progress') &&
+                jobData &&
+                typeof jobData.jobId === 'string' &&
+                jobData.jobId
+              ) {
+                pollJob(jobData.jobId).catch(() => {
+                  clearJobPolling();
+                  setError('We could not connect to the AI service. Please try again shortly.');
+                  setIsGenerating(false);
+                  setActiveJobId(null);
+                  setJobMessage(null);
+                });
+              }
+            }
+          } catch {
+            // Ignore job fetch errors on initial load.
+          }
         }
       } catch (err) {
         if (!cancelled) setContextMessage('We could not load your saved details.');
@@ -191,6 +247,96 @@ export default function WritingDeskClient() {
     }
   }
 
+  function handleJobSnapshot(data: JobSnapshot | null | undefined): JobStatus | null {
+    if (!data || typeof data !== 'object') {
+      return null;
+    }
+
+    const status = data.status;
+    if (!status) {
+      return null;
+    }
+
+    if (typeof data.credits === 'number') {
+      setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
+    }
+
+    if (typeof data.message === 'string') {
+      setJobMessage(data.message);
+    } else {
+      setJobMessage(null);
+    }
+
+    if (typeof data.jobId === 'string' && data.jobId) {
+      setActiveJobId(data.jobId);
+    }
+
+    const payload = data.payload;
+    if (payload && typeof payload === 'object') {
+      if (typeof payload.prompt === 'string') {
+        setIssue(payload.prompt);
+      }
+      if (typeof payload.tone === 'string' && payload.tone.trim()) {
+        setTone(payload.tone);
+      }
+      if (Array.isArray(payload.details)) {
+        const mapped: Record<string, string> = {};
+        payload.details.forEach((detail) => {
+          if (!detail || typeof detail.question !== 'string') {
+            return;
+          }
+          const match = QUESTIONS.find((q) => q.prompt === detail.question);
+          if (match) {
+            mapped[match.id] = detail.answer || '';
+          }
+        });
+        setAnswers(mapped);
+      }
+      if (
+        (status === 'in_progress' || status === 'queued') &&
+        ((typeof payload.prompt === 'string' && payload.prompt.trim()) ||
+          (Array.isArray(payload.details) && payload.details.length > 0))
+      ) {
+        setPhase('review');
+      }
+    }
+
+    if (status === 'completed') {
+      clearJobPolling();
+      if (typeof data.content === 'string') {
+        const html = normaliseLetterHtml(data.content);
+        setLetter(enhanceCitations(html));
+      }
+      setIsGenerating(false);
+      setActiveJobId(null);
+      setJobMessage(null);
+      setError(null);
+      setPhase('result');
+      return status;
+    }
+
+    if (status === 'failed') {
+      clearJobPolling();
+      setIsGenerating(false);
+      setActiveJobId(null);
+      setJobMessage(null);
+      setLetter(null);
+      setError(data.error || 'The AI service was unable to draft your letter just now.');
+      setPhase((prev) => (prev === 'result' ? 'review' : prev));
+      return status;
+    }
+
+    if (status === 'queued' || status === 'in_progress') {
+      setLetter(null);
+      setError(null);
+      setNotice(null);
+      setIsGenerating(true);
+      return status;
+    }
+
+    return status;
+  }
+
   async function pollJob(jobId: string) {
     try {
       const res = await fetch(`/api/ai/generate/${jobId}`, {
@@ -201,45 +347,20 @@ export default function WritingDeskClient() {
         throw new Error('Failed to fetch job status');
       }
 
-      const data = await res.json();
+      const data: JobSnapshot = await res.json();
+      const status = handleJobSnapshot(data);
 
-      if (typeof data?.credits === 'number') {
-        setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
+      if (status === 'queued' || status === 'in_progress') {
+        pollTimeoutRef.current = setTimeout(() => {
+          pollJob(jobId).catch(() => {
+            clearJobPolling();
+            setError('We could not connect to the AI service. Please try again shortly.');
+            setIsGenerating(false);
+            setActiveJobId(null);
+            setJobMessage(null);
+          });
+        }, 5000);
       }
-
-      if (typeof data?.message === 'string') {
-        setJobMessage(data.message);
-      }
-
-      if (data?.status === 'completed' && typeof data?.content === 'string') {
-        clearJobPolling();
-        const html = normaliseLetterHtml(data.content);
-        setLetter(enhanceCitations(html));
-        setPhase('result');
-        setIsGenerating(false);
-        setActiveJobId(null);
-        setJobMessage(null);
-        return;
-      }
-
-      if (data?.status === 'failed') {
-        clearJobPolling();
-        setError(data?.error || 'The AI service was unable to draft your letter just now.');
-        setIsGenerating(false);
-        setActiveJobId(null);
-        setJobMessage(null);
-        return;
-      }
-
-      pollTimeoutRef.current = setTimeout(() => {
-        pollJob(jobId).catch(() => {
-          clearJobPolling();
-          setError('We could not connect to the AI service. Please try again shortly.');
-          setIsGenerating(false);
-          setActiveJobId(null);
-          setJobMessage(null);
-        });
-      }, 5000);
     } catch (err) {
       clearJobPolling();
       setError('We could not connect to the AI service. Please try again shortly.');
@@ -602,27 +723,24 @@ export default function WritingDeskClient() {
       }
 
       const data = await res.json();
+      const status = handleJobSnapshot(data);
+      const jobId = typeof data?.jobId === 'string' ? data.jobId : null;
 
-      if (typeof data?.credits === 'number') {
-        setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
-      }
-
-      if (typeof data?.message === 'string') {
-        setJobMessage(data.message);
-      }
-
-      if (typeof data?.jobId !== 'string' || !data.jobId) {
-        throw new Error('Deep research job identifier missing in response.');
-      }
-
-      setActiveJobId(data.jobId);
-      pollJob(data.jobId).catch(() => {
+      if (status === 'queued' || status === 'in_progress') {
+        if (!jobId) {
+          throw new Error('Deep research job identifier missing in response.');
+        }
         clearJobPolling();
-        setError('We could not connect to the AI service. Please try again shortly.');
+        pollJob(jobId).catch(() => {
+          clearJobPolling();
+          setError('We could not connect to the AI service. Please try again shortly.');
+          setIsGenerating(false);
+          setActiveJobId(null);
+          setJobMessage(null);
+        });
+      } else {
         setIsGenerating(false);
-        setActiveJobId(null);
-        setJobMessage(null);
-      });
+      }
     } catch (err) {
       clearJobPolling();
       setError('We could not connect to the AI service. Please try again shortly.');
