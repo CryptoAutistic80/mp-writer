@@ -394,6 +394,50 @@ export default function WritingDeskClient() {
     return container.innerHTML;
   }
 
+  // Debug function - can be called from browser console: testReferencesDetection()
+  (window as any).testReferencesDetection = () => {
+    const testCases = [
+      {
+        name: "Standard AI format",
+        html: `<div class="letter">
+          <p>Dear MP,</p>
+          <p>This is a test with citations [1].</p>
+          <h3>References</h3>
+          <ol>
+            <li><a href="https://example.com">Test Source — Gov (2024)</a></li>
+          </ol>
+        </div>`
+      },
+      {
+        name: "References without immediate sibling",
+        html: `<div class="letter">
+          <p>Dear MP,</p>
+          <p>This is a test with citations [1].</p>
+          <div>
+            <h3>References</h3>
+          </div>
+          <ol>
+            <li><a href="https://example.com">Test Source — Gov (2024)</a></li>
+          </ol>
+        </div>`
+      },
+      {
+        name: "No references section",
+        html: `<div class="letter">
+          <p>Dear MP,</p>
+          <p>This is a test without references.</p>
+        </div>`
+      }
+    ];
+
+    testCases.forEach(testCase => {
+      console.log(`\n=== Testing: ${testCase.name} ===`);
+      const result = enhanceCitations(testCase.html);
+      console.log('Input:', testCase.html);
+      console.log('Output:', result);
+    });
+  };
+
   function enhanceCitations(html: string): string {
     const findReferencesList = (
       container: HTMLElement,
@@ -421,7 +465,22 @@ export default function WritingDeskClient() {
     const root = document.createElement('div');
     root.innerHTML = html;
 
+    // Debug: Log the HTML structure
+    console.log('=== DEBUGGING REFERENCES ===');
+    console.log('Raw HTML:', html);
+    console.log('Root element:', root);
+    
+    // Debug: Check what headings exist
+    const allHeadings = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+    console.log('Found headings:', allHeadings.map(h => ({
+      tag: h.tagName,
+      text: h.textContent?.trim(),
+      matches: /^references\b/i.test((h.textContent || '').trim())
+    })));
+
     const refsList = findReferencesList(root);
+    console.log('References list found:', refsList);
+    console.log('=== END DEBUG ===');
     const urlToIndex = new Map<string, number>();
     const normalise = (u: string) => {
       try {
@@ -895,3 +954,4 @@ export default function WritingDeskClient() {
     </main>
   );
 }
+
