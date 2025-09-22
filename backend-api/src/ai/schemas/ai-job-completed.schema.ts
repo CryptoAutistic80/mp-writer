@@ -67,7 +67,7 @@ AiJobCompletedSchema.index({ user: 1, createdAt: -1 });
 AiJobCompletedSchema.index({ jobId: 1 }, { unique: true });
 
 AiJobCompletedSchema.set('toJSON', {
-  transform: (_doc, ret) => {
+  transform: (_doc, ret: any) => {
     ret.id = ret.jobId;
     delete ret._id;
     delete ret.__v;
