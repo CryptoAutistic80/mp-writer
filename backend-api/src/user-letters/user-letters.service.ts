@@ -96,12 +96,28 @@ export class UserLettersService {
       updatedAt: now,
     };
 
+    const setOnInsert: Record<string, unknown> = {
+      prompt: '',
+      tone: '',
+      details: [],
+      mpName: '',
+      constituency: '',
+      userName: '',
+      userAddressLine: '',
+      ciphertext: null,
+      error: payload.error ?? null,
+      credits: null,
+      lastResponseId: payload.lastResponseId ?? null,
+      createdAt: now,
+    };
+
     if (payload.message !== undefined) {
       update.message = payload.message ?? '';
     }
 
     if (payload.credits !== undefined) {
       update.credits = typeof payload.credits === 'number' ? payload.credits : null;
+      delete setOnInsert.credits;
     }
 
     if (payload.error !== undefined) {
@@ -120,20 +136,7 @@ export class UserLettersService {
       { user: payload.userId, jobId: payload.jobId },
       {
         $set: update,
-        $setOnInsert: {
-          prompt: '',
-          tone: '',
-          details: [],
-          mpName: '',
-          constituency: '',
-          userName: '',
-          userAddressLine: '',
-          ciphertext: null,
-          error: payload.error ?? null,
-          credits: typeof payload.credits === 'number' ? payload.credits : null,
-          lastResponseId: payload.lastResponseId ?? null,
-          createdAt: now,
-        },
+        $setOnInsert: setOnInsert,
       },
       { upsert: true },
     );
