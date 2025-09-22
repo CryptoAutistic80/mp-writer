@@ -394,225 +394,159 @@ export default function WritingDeskClient() {
     return container.innerHTML;
   }
 
-  // Convert inline long links in the body into numbered [n] citations
-  // that link down to the References list, which remains expanded.
   function enhanceCitations(html: string): string {
-    // NEW: Strip inline citations/links from the body while preserving
-    // the clickable References list at the bottom.
-    {
-      const root2 = document.createElement('div');
-      root2.innerHTML = html;
-
-      const heading2 = Array.from(root2.querySelectorAll('h1,h2,h3,h4,h5,h6')).find((h) =>
-        /^references\b/i.test((h.textContent || '').trim()),
+    const findReferencesList = (
+      container: HTMLElement,
+    ): HTMLOListElement | HTMLUListElement | null => {
+      const heading = Array.from(container.querySelectorAll('h1,h2,h3,h4,h5,h6')).find((candidate) =>
+        /^references\b/i.test((candidate.textContent || '').trim()),
       );
-      const refsList2 = heading2
-        ? (heading2.nextElementSibling && /^(ol|ul)$/i.test(heading2.nextElementSibling.tagName)
-            ? (heading2.nextElementSibling as HTMLOListElement | HTMLUListElement)
-            : (heading2.parentElement?.querySelector('ol,ul') as HTMLOListElement | HTMLUListElement | null))
-        : null;
-
-      const until2 = refsList2 as Node | null;
-      const walker2 = document.createTreeWalker(root2, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
-      let node2: Node | null = walker2.nextNode();
-      const urlLike2 = /^(?:https?:\/\/|www\.)/i;
-
-      while (node2 && node2 !== until2) {
-        if (node2.nodeType === Node.ELEMENT_NODE) {
-          const el = node2 as Element;
-          if (until2 && el === until2) break;
-          if (el.matches('a[href]')) {
-            const a = el as HTMLAnchorElement;
-            // Remove the anchor entirely from the body
-            a.replaceWith(document.createTextNode(''));
-          }
-        }
-
-        if (node2 && node2.nodeType === Node.TEXT_NODE && (node2.parentElement && (!until2 || !until2.contains(node2)))) {
-          let text = node2.textContent || '';
-          const domainPart = String.raw`(?:https?:\/\/|www\.)[a-z0-9.-]+\.[a-z]{2,}(?:\/[\w\-./%?#=&+]*)?`;
-          const parenWithUrl = new RegExp(String.raw`\(\s*(?:\[)?${domainPart}(?:\])?(?:\s*\[[0-9]+\])?\s*\)`, 'gi');
-          text = text.replace(parenWithUrl, '');
-          // Remove parenthetical Markdown links entirely: ([label](https://...))
-          text = text.replace(/\(\s*\[[^\]]+\]\(https?:\/\/[^)\s]+\)\s*\)/gi, '');
-          // Remove any inline Markdown links: [label](https://...)
-          text = text.replace(/\[[^\]]+\]\(https?:\/\/[^)\s]+\)/gi, '');
-          // Remove bracketed bare domains: [www.example.com] or [https://...]
-          text = text.replace(/\[(?:https?:\/\/|www\.)[^\]]+\]/gi, '');
-          // Remove [n] style citation markers (allowing spaces and NBSP inside)
-          const citeNum = /(?:\s|\u00A0)*\[\s*\d+\s*\](?:[,.;:])?/g;
-          text = text.replace(citeNum, '');
-          text = text.replace(/\s{2,}/g, ' ');
-          if (text !== (node2.textContent || '')) node2.textContent = text;
-        }
-
-        node2 = walker2.nextNode();
+      if (!heading) {
+        return null;
       }
 
-      let output2 = root2.innerHTML;
-      output2 = output2.replace(/\(\s*\)/g, '');
-      output2 = output2.replace(/\s{2,}/g, ' ');
-      return output2;
-    }
+      const sibling = heading.nextElementSibling;
+      if (sibling && /^(ol|ul)$/i.test(sibling.tagName)) {
+        return sibling as HTMLOListElement | HTMLUListElement;
+      }
+
+      const parentList = heading.parentElement?.querySelector('ol,ul');
+      if (parentList) {
+        return parentList as HTMLOListElement | HTMLUListElement;
+      }
+
+      return null;
+    };
+
     const root = document.createElement('div');
     root.innerHTML = html;
 
-    // 1) Locate References heading and list
-    const heading = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6')).find((h) =>
-      /^references\b/i.test((h.textContent || '').trim()),
-    );
-    const refsList = heading
-      ? (heading.nextElementSibling && /^(ol|ul)$/i.test(heading.nextElementSibling.tagName)
-          ? (heading.nextElementSibling as HTMLOListElement | HTMLUListElement)
-          : (heading.parentElement?.querySelector('ol,ul') as HTMLOListElement | HTMLUListElement | null))
-      : null;
-
-    if (!refsList) {
-      // Nothing to map to; just return input
-      return root.innerHTML;
-    }
-
-    // 2) Build URL -> index map from references
+    const refsList = findReferencesList(root);
     const urlToIndex = new Map<string, number>();
     const normalise = (u: string) => {
       try {
         const url = new URL(u);
-        // Canonicalise for matching: strip hash and query to ignore trackers/anchors
         return `${url.protocol}//${url.host}${url.pathname}`;
       } catch {
         return u.trim();
       }
     };
 
-    const items = Array.from(refsList.querySelectorAll('li'));
+    const items = refsList ? Array.from(refsList.querySelectorAll('li')) : [];
     items.forEach((li, i) => {
-      const a = li.querySelector('a[href]') as HTMLAnchorElement | null;
-      if (!a || !a.href) return;
+      const anchor = li.querySelector<HTMLAnchorElement>('a[href]');
+      if (!anchor || !anchor.href) {
+        return;
+      }
       const idx = i + 1;
-      const norm = normalise(a.href);
-      if (!urlToIndex.has(norm)) urlToIndex.set(norm, idx);
+      const norm = normalise(anchor.href);
+      if (!urlToIndex.has(norm)) {
+        urlToIndex.set(norm, idx);
+      }
       li.id = `ref-${idx}`;
     });
     let nextIndex = items.length + 1;
 
-    const appendReference = (href: string) => {
-      // Avoid duplicates after normalisation
-      const norm = normalise(href);
-      const existing = urlToIndex.get(norm);
-      if (existing) return existing;
-      const li = document.createElement('li');
-      const a = document.createElement('a');
-      a.href = href;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      // Use domain as fallback text; backend already supplies nice titles in most cases
-      try {
-        const u = new URL(href);
-        a.textContent = u.hostname.replace(/^www\./, '') + ' — ' + u.pathname.replace(/\/$/, '');
-      } catch {
-        a.textContent = href;
+    const appendReference = refsList
+      ? (href: string): number | null => {
+          const trimmed = href.trim();
+          if (!trimmed || trimmed.startsWith('#')) {
+            return null;
+          }
+          const norm = normalise(trimmed);
+          const existing = urlToIndex.get(norm);
+          if (existing) {
+            return existing;
+          }
+          const li = document.createElement('li');
+          const anchor = document.createElement('a');
+          anchor.href = trimmed;
+          anchor.target = '_blank';
+          anchor.rel = 'noopener noreferrer';
+          try {
+            const parsed = new URL(trimmed);
+            anchor.textContent = `${parsed.hostname.replace(/^www\./, '')} — ${parsed.pathname.replace(/\/$/, '')}`;
+          } catch {
+            anchor.textContent = trimmed;
+          }
+          li.appendChild(anchor);
+          refsList.appendChild(li);
+          const assigned = nextIndex++;
+          li.id = `ref-${assigned}`;
+          urlToIndex.set(norm, assigned);
+          return assigned;
+        }
+      : () => null;
+
+    const recordReference = (href: string | null | undefined) => {
+      if (!href) {
+        return;
       }
-      li.appendChild(a);
-      refsList.appendChild(li);
-      const assigned = nextIndex++;
-      li.id = `ref-${assigned}`;
-      urlToIndex.set(norm, assigned);
-      return assigned;
+      appendReference(href);
     };
 
-    // 3) Walk body (before references list) replacing anchors and parenthetical URLs
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
-    let node: Node | null = walker.nextNode();
-    const until = refsList as Node;
-    const citationClass = 'citation';
-
-    const replaceAnchorWithCitation = (a: HTMLAnchorElement) => {
-      const norm = normalise(a.href || '');
-      let index = urlToIndex.get(norm);
-      if (!index) {
-        index = appendReference(a.href || '');
+    const anchors = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]'));
+    anchors.forEach((anchor) => {
+      if (refsList && refsList.contains(anchor)) {
+        return;
       }
-      const cite = document.createElement('a');
-      cite.href = `#ref-${index}`;
-      cite.className = citationClass;
-      cite.textContent = `[${index}]`;
-      a.replaceWith(cite);
-    };
-
-    while (node && node !== until) {
-      // Replace anchors in the body
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as Element;
-        // Stop walking into references section
-        if (el === until) break;
-        if (el.matches('a[href]')) {
-          replaceAnchorWithCitation(el as HTMLAnchorElement);
-        }
+      const href = anchor.getAttribute('href') || anchor.href || '';
+      if (href && !href.startsWith('#')) {
+        recordReference(href);
       }
+      const textContent = anchor.textContent || '';
+      if (/^\s*(?:\[\s*\d+\s*\]|【\s*\d+\s*】)\s*$/.test(textContent)) {
+        anchor.remove();
+        return;
+      }
+      anchor.replaceWith(document.createTextNode(textContent));
+    });
 
-      // Replace parenthetical raw URLs within text nodes: (https://...)
-      if (node.nodeType === Node.TEXT_NODE && node.parentElement && !(refsList.contains(node))) {
-        const text = node.textContent || '';
-        const regex = /\((https?:\/\/[^)\s]+)\)/g;
-        if (regex.test(text)) {
-          const frag = document.createDocumentFragment();
-          let lastIndex = 0;
-          let m: RegExpExecArray | null;
-          regex.lastIndex = 0;
-          while ((m = regex.exec(text))) {
-            const before = text.slice(lastIndex, m.index);
-            if (before) frag.appendChild(document.createTextNode(before));
-            const url = m[1];
-            let idx = urlToIndex.get(normalise(url));
-            if (!idx) idx = appendReference(url);
-            if (idx) {
-              const cite = document.createElement('a');
-              cite.href = `#ref-${idx}`;
-              cite.className = citationClass;
-              cite.textContent = `[${idx}]`;
-              frag.appendChild(cite);
-            } else {
-              // Not in references; keep as original parentheses
-              frag.appendChild(document.createTextNode(m[0]));
-            }
-            lastIndex = regex.lastIndex;
-          }
-          const tail = text.slice(lastIndex);
-          if (tail) frag.appendChild(document.createTextNode(tail));
-          if (node.parentNode) {
-            node.parentNode.replaceChild(frag, node);
-          }
-        }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const citationNumber = /(?:\s|\u00A0)*(?:\[\s*\d+\s*\]|【\s*\d+\s*】|\(\s*\d+\s*\))(?:[,.;:])?/g;
+    const markdownLink = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi;
+    const parenWithUrl = new RegExp(
+      String.raw`\(\s*(?:\[)?(https?:\/\/[^\s)\]]+)(?:\])?(?:\s*\[[0-9]+\])?\s*\)`,
+      'gi',
+    );
+    let current: Node | null = walker.nextNode();
+    while (current) {
+      const parentEl = current.parentElement;
+      if (parentEl && refsList && refsList.contains(parentEl)) {
+        current = walker.nextNode();
+        continue;
       }
 
-      node = walker.nextNode();
+      let text = current.textContent || '';
+      if (!text.trim()) {
+        current = walker.nextNode();
+        continue;
+      }
+
+      text = text.replace(markdownLink, (_match, linkText, url) => {
+        recordReference(url);
+        return linkText;
+      });
+
+      text = text.replace(parenWithUrl, (_match, url: string) => {
+        recordReference(url);
+        return '';
+      });
+
+      text = text.replace(/\[(?:https?:\/\/|www\.)[^\]]+\]/gi, '');
+      text = text.replace(citationNumber, '');
+      text = text.replace(/\s{2,}/g, ' ');
+      text = text.replace(/\(\s*\)/g, '');
+      if (text !== current.textContent) {
+        current.textContent = text;
+      }
+
+      current = walker.nextNode();
     }
 
     let output = root.innerHTML;
-    // 4) Clean up leftover parenthetical site labels around citations, e.g.
-    //    (bbc.co.uk [2]) -> [2]
-    //    ([www.bbc.co.uk] [2]) -> [2]
-    //    (https://example.com [3]) -> [3]
-    const domainPart = String.raw`(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:\/[\w\-./%?#=&+]*)?`;
-    const citePart = String.raw`<a[^>]*class="citation"[^>]*>\[\d+\]<\/a>`;
-    const patterns: RegExp[] = [
-      new RegExp(String.raw`\(\s*(?:\[)?${domainPart}(?:\])?\s*(?:[,;:]?\s*)?(${citePart})\s*\)`, 'gi'),
-      new RegExp(String.raw`\(\s*(${citePart})\s*(?:[,;:]?\s*)?(?:\[)?${domainPart}(?:\])?\s*\)`, 'gi'),
-    ];
-    patterns.forEach((re) => {
-      output = output.replace(re, '$1');
-    });
-    // Collapse parentheses that contain only citations like: ([1], [2]) -> [1][2]
-    const citeToken = String.raw`<a[^>]*class="citation"[^>]*>\[\d+\]<\/a>`;
-    const citesOnly = new RegExp(String.raw`\(\s*((?:${citeToken}(?:\s*[,;]\s*)?)+)\s*\)`, 'gi');
-    output = output.replace(citesOnly, (_m, inner) => inner.replace(/\s*[,;]\s*/g, ''));
-
-    // Collapse immediately repeated identical citations: [2][2] -> [2]
-    const dupCite = new RegExp(String.raw`(${citeToken})(?:\s*\1)+`, 'g');
-    output = output.replace(dupCite, '$1');
-
-    // Reduce any remaining double spaces introduced by replacements
     output = output.replace(/\s{2,}/g, ' ');
+    output = output.replace(/\(\s*\)/g, '');
     return output;
   }
 
