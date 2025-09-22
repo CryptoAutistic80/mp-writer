@@ -1410,6 +1410,84 @@ body {
   gap: 12px;
 }
 
+.letter-history {
+  display: grid;
+  gap: 16px;
+}
+
+.letter-history-header {
+  display: grid;
+  gap: 4px;
+}
+
+.letter-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.letter-history-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  background: #fff;
+  display: grid;
+  gap: 8px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.letter-history-item.active {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.letter-history-item.in-progress {
+  border-color: #f97316;
+}
+
+.letter-history-summary {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.letter-history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--ink-600);
+  font-size: 0.9rem;
+}
+
+.letter-history-status {
+  font-weight: 700;
+}
+
+.letter-history-message {
+  margin: 0;
+  color: var(--ink-600);
+  font-size: 0.95rem;
+}
+
+.letter-history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.letter-history-loading,
+.letter-history-empty,
+.letter-history-error {
+  color: var(--ink-600);
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.letter-history-error {
+  color: #dc2626;
+}
+
 .form-actions {
   display: flex;
   flex-wrap: wrap;

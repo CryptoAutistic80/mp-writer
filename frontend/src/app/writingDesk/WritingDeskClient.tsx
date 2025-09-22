@@ -28,6 +28,47 @@ type UserContext = {
   addressLine: string;
 };
 
+type UserLetterStatus = 'queued' | 'in_progress' | 'completed' | 'failed';
+
+type UserLetterSummary = {
+  id: string;
+  jobId: string;
+  status: UserLetterStatus;
+  message: string;
+  prompt: string;
+  tone: string;
+  mpName: string;
+  constituency: string;
+  hasContent: boolean;
+  credits: number | null;
+  updatedAt: string;
+  createdAt: string;
+};
+
+type LetterDetailEntry = {
+  question: string;
+  answer: string;
+};
+
+type UserLetterDetail = {
+  id: string;
+  jobId: string;
+  status: UserLetterStatus;
+  message: string;
+  prompt: string;
+  tone: string;
+  details: LetterDetailEntry[];
+  mpName: string;
+  constituency: string;
+  userName: string;
+  userAddressLine: string;
+  content: string | null;
+  error: string | null;
+  credits: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export default function WritingDeskClient() {
   const [phase, setPhase] = useState<Phase>('issue');
   const [issue, setIssue] = useState('');
@@ -42,7 +83,13 @@ export default function WritingDeskClient() {
   const [notice, setNotice] = useState<string | null>(null);
   const [jobMessage, setJobMessage] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [letters, setLetters] = useState<UserLetterSummary[]>([]);
+  const [lettersLoading, setLettersLoading] = useState<boolean>(true);
+  const [lettersError, setLettersError] = useState<string | null>(null);
+  const [selectedLetterId, setSelectedLetterId] = useState<string | null>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMountedRef = useRef(true);
+  const lettersRef = useRef<UserLetterSummary[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,7 +147,14 @@ export default function WritingDeskClient() {
   }, []);
 
   useEffect(() => {
+    refreshLetters().catch(() => {
+      /* Errors handled inside refreshLetters */
+    });
+  }, []);
+
+  useEffect(() => {
     return () => {
+      isMountedRef.current = false;
       if (pollTimeoutRef.current) {
         clearTimeout(pollTimeoutRef.current);
       }
@@ -191,6 +245,243 @@ export default function WritingDeskClient() {
     }
   }
 
+  function describeStatus(status: UserLetterStatus): string {
+    switch (status) {
+      case 'completed':
+        return 'Completed';
+      case 'failed':
+        return 'Failed';
+      case 'queued':
+      case 'in_progress':
+        return 'In progress';
+      default:
+        return status;
+    }
+  }
+
+  function summarisePrompt(prompt: string): string {
+    const trimmed = (prompt || '').trim();
+    if (!trimmed) {
+      return 'No issue summary saved yet.';
+    }
+    if (trimmed.length <= 160) {
+      return trimmed;
+    }
+    return `${trimmed.slice(0, 157)}…`;
+  }
+
+  function formatUpdatedAt(value: string): string {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  function mapDetailsToAnswers(details: LetterDetailEntry[] = []): Record<string, string> {
+    const mapped: Record<string, string> = {};
+    details.forEach((entry) => {
+      if (!entry) return;
+      const match = QUESTIONS.find((question) => question.prompt === entry.question);
+      if (match) {
+        mapped[match.id] = entry.answer || '';
+      }
+    });
+    return mapped;
+  }
+
+  async function fetchLetterDetail(letterId: string): Promise<UserLetterDetail> {
+    const res = await fetch(`/api/user/letters/${letterId}`, {
+      credentials: 'include',
+      cache: 'no-store',
+    });
+
+    if (!res.ok) {
+      const message = res.status === 404 ? 'Letter not found' : 'Failed to fetch saved letter.';
+      throw new Error(message);
+    }
+
+    return res.json();
+  }
+
+  async function resumeLetter(letterId: string) {
+    try {
+      const data = await fetchLetterDetail(letterId);
+      if (!isMountedRef.current) return;
+
+      if (data.status === 'completed' && typeof data.content === 'string') {
+        await viewLetter(letterId);
+        return;
+      }
+
+      if (data.status === 'failed') {
+        clearJobPolling();
+        setActiveJobId(null);
+        setIsGenerating(false);
+        setJobMessage(null);
+        setLetter(null);
+        setPhase('review');
+        setSelectedLetterId(letterId);
+        setError(data.error || 'The previous request was unable to generate a letter.');
+        return;
+      }
+
+      if (!data.jobId) {
+        setError('We could not resume that request. Please try again shortly.');
+        return;
+      }
+
+      const mapped = mapDetailsToAnswers(data.details || []);
+      const restored: Record<string, string> = {};
+      QUESTIONS.forEach((question) => {
+        restored[question.id] = mapped[question.id] ?? '';
+      });
+
+      clearJobPolling();
+      setActiveJobId(data.jobId);
+      setSelectedLetterId(letterId);
+      setIsGenerating(true);
+      setNotice(null);
+      setError(null);
+      setLetter(null);
+      setPhase('review');
+      setJobMessage(data.message || 'Deep research in progress…');
+      setIssue(data.prompt || '');
+      setTone((data.tone || '').trim() || 'formal');
+      setAnswers(restored);
+
+      if (typeof data.credits === 'number') {
+        setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
+      }
+
+      pollJob(data.jobId).catch(() => {
+        clearJobPolling();
+        if (!isMountedRef.current) return;
+        setError('We could not connect to the AI service. Please try again shortly.');
+        setIsGenerating(false);
+        setActiveJobId(null);
+        setJobMessage(null);
+      });
+    } catch (err) {
+      if (!isMountedRef.current) return;
+      setError('We could not resume that request. Please try again shortly.');
+    }
+  }
+
+  async function viewLetter(letterId: string) {
+    try {
+      const data = await fetchLetterDetail(letterId);
+      if (!isMountedRef.current) return;
+
+      setSelectedLetterId(letterId);
+
+      if (typeof data.credits === 'number') {
+        setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
+      }
+
+      if (data.status === 'completed' && typeof data.content === 'string') {
+        clearJobPolling();
+        setActiveJobId(null);
+        setIsGenerating(false);
+        setJobMessage(null);
+        setNotice(null);
+        setError(null);
+
+        const mapped = mapDetailsToAnswers(data.details || []);
+        const restored: Record<string, string> = {};
+        QUESTIONS.forEach((question) => {
+          restored[question.id] = mapped[question.id] ?? '';
+        });
+        setAnswers(restored);
+        setIssue(data.prompt || '');
+        setTone((data.tone || '').trim() || 'formal');
+
+        const html = normaliseLetterHtml(data.content);
+        setLetter(enhanceCitations(html));
+        setPhase('result');
+        return;
+      }
+
+      if ((data.status === 'in_progress' || data.status === 'queued') && data.jobId) {
+        await resumeLetter(letterId);
+        return;
+      }
+
+      if (data.status === 'failed') {
+        clearJobPolling();
+        setActiveJobId(null);
+        setIsGenerating(false);
+        setJobMessage(null);
+        setLetter(null);
+        setPhase('review');
+        const mapped = mapDetailsToAnswers(data.details || []);
+        const restored: Record<string, string> = {};
+        QUESTIONS.forEach((question) => {
+          restored[question.id] = mapped[question.id] ?? '';
+        });
+        setAnswers(restored);
+        setIssue(data.prompt || '');
+        setTone((data.tone || '').trim() || 'formal');
+        setError(data.error || 'The AI service was unable to draft your letter.');
+        return;
+      }
+
+      setError('This letter is not available yet. Please try again soon.');
+    } catch (err) {
+      if (!isMountedRef.current) return;
+      setError('We could not load that letter. Please try again shortly.');
+    }
+  }
+
+  async function refreshLetters(options: { resume?: boolean } = {}) {
+    try {
+      const res = await fetch('/api/user/letters', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+
+      if (res.status === 401) {
+        if (!isMountedRef.current) return;
+        setLetters([]);
+        lettersRef.current = [];
+        setLettersLoading(false);
+        setLettersError('Sign in to view saved letters.');
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error('Failed to load letters');
+      }
+
+      const data = await res.json();
+      if (!isMountedRef.current) return;
+
+      const list: UserLetterSummary[] = Array.isArray(data?.letters) ? data.letters : [];
+      setLetters(list);
+      lettersRef.current = list;
+      setLettersError(null);
+      setLettersLoading(false);
+
+      if (options.resume !== false) {
+        const active = list.find(
+          (item) => (item.status === 'in_progress' || item.status === 'queued') && item.jobId,
+        );
+        if (active && active.jobId && active.jobId !== activeJobId) {
+          await resumeLetter(active.id);
+        }
+      }
+    } catch (_error) {
+      if (!isMountedRef.current) return;
+      setLettersLoading(false);
+      setLettersError('We could not load your saved letters.');
+    }
+  }
+
   async function pollJob(jobId: string) {
     try {
       const res = await fetch(`/api/ai/generate/${jobId}`, {
@@ -202,6 +493,8 @@ export default function WritingDeskClient() {
       }
 
       const data = await res.json();
+
+      if (!isMountedRef.current) return;
 
       if (typeof data?.credits === 'number') {
         setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
@@ -219,6 +512,11 @@ export default function WritingDeskClient() {
         setIsGenerating(false);
         setActiveJobId(null);
         setJobMessage(null);
+        await refreshLetters({ resume: false });
+        const summary = lettersRef.current.find((item) => item.jobId === jobId);
+        if (summary) {
+          setSelectedLetterId(summary.id);
+        }
         return;
       }
 
@@ -228,6 +526,7 @@ export default function WritingDeskClient() {
         setIsGenerating(false);
         setActiveJobId(null);
         setJobMessage(null);
+        await refreshLetters({ resume: false });
         return;
       }
 
@@ -238,6 +537,9 @@ export default function WritingDeskClient() {
           setIsGenerating(false);
           setActiveJobId(null);
           setJobMessage(null);
+          refreshLetters({ resume: false }).catch(() => {
+            /* handled elsewhere */
+          });
         });
       }, 5000);
     } catch (err) {
@@ -246,6 +548,9 @@ export default function WritingDeskClient() {
       setIsGenerating(false);
       setActiveJobId(null);
       setJobMessage(null);
+      refreshLetters({ resume: false }).catch(() => {
+        /* handled elsewhere */
+      });
     }
   }
 
@@ -681,7 +986,11 @@ export default function WritingDeskClient() {
         throw new Error('Deep research job identifier missing in response.');
       }
 
+      setSelectedLetterId(null);
       setActiveJobId(data.jobId);
+      refreshLetters({ resume: false }).catch(() => {
+        /* handled elsewhere */
+      });
       pollJob(data.jobId).catch(() => {
         clearJobPolling();
         setError('We could not connect to the AI service. Please try again shortly.');
@@ -783,6 +1092,67 @@ export default function WritingDeskClient() {
           </div>
         </section>
       )}
+
+      <section className="card">
+        <div className="container letter-history">
+          <div className="letter-history-header">
+            <h2 className="section-title">Saved letters</h2>
+            <p className="section-sub">Return to previous drafts or resume an in-progress request.</p>
+          </div>
+          {lettersLoading ? (
+            <p className="letter-history-loading">Loading your letters…</p>
+          ) : lettersError ? (
+            <p className="letter-history-error">{lettersError}</p>
+          ) : letters.length === 0 ? (
+            <p className="letter-history-empty">You haven&apos;t generated any letters yet.</p>
+          ) : (
+            <ul className="letter-history-list">
+              {letters.map((item) => {
+                const statusLabel = describeStatus(item.status);
+                const updatedAtLabel = formatUpdatedAt(item.updatedAt);
+                const itemClasses = [
+                  'letter-history-item',
+                  selectedLetterId === item.id ? 'active' : '',
+                  activeJobId && item.jobId === activeJobId ? 'in-progress' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ');
+                return (
+                  <li key={item.id} className={itemClasses}>
+                    <div className="letter-history-summary">{summarisePrompt(item.prompt)}</div>
+                    <div className="letter-history-meta">
+                      <span className="letter-history-status">{statusLabel}</span>
+                      {updatedAtLabel && <span>{updatedAtLabel}</span>}
+                      {item.mpName && <span>MP: {item.mpName}</span>}
+                    </div>
+                    {item.message && <p className="letter-history-message">{item.message}</p>}
+                    <div className="letter-history-actions">
+                      {item.status === 'completed' ? (
+                        <button type="button" className="btn-secondary" onClick={() => viewLetter(item.id)}>
+                          View letter
+                        </button>
+                      ) : item.status === 'failed' ? (
+                        <button type="button" className="btn-secondary" onClick={() => viewLetter(item.id)}>
+                          View details
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => resumeLetter(item.id)}
+                          disabled={isGenerating && activeJobId === item.jobId}
+                        >
+                          Resume progress
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </section>
 
       {phase === 'issue' && (
         <section className="card">

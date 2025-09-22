@@ -9,6 +9,7 @@ import { FollowUpDetailDto } from './dto/generate.dto';
 import { UserCreditsService } from '../user-credits/user-credits.service';
 import { UserMpService } from '../user-mp/user-mp.service';
 import { UserAddressService } from '../user-address-store/user-address.service';
+import { UserLettersService } from '../user-letters/user-letters.service';
 
 const DEFAULT_MODEL = 'o4-mini-deep-research';
 const DEFAULT_POLL_INTERVAL_MS = 5000;
@@ -86,6 +87,7 @@ export class AiService {
     private readonly userCredits: UserCreditsService,
     private readonly userMp: UserMpService,
     private readonly userAddress: UserAddressService,
+    private readonly userLetters: UserLettersService,
   ) {}
 
   async enqueueGenerate(request: GenerateJobRequest): Promise<GenerateJobResponse> {
@@ -135,6 +137,31 @@ export class AiService {
 
     this.jobs.set(jobId, job);
 
+    try {
+      await this.userLetters.startJob({
+        userId,
+        jobId,
+        status: job.status,
+        message: job.message,
+        prompt: request.prompt,
+        tone: request.tone,
+        details: (request.details || []).map((detail) => ({
+          question: detail.question,
+          answer: detail.answer,
+        })),
+        mpName,
+        constituency,
+        userName: request.userName || '',
+        userAddressLine: addressLine,
+        credits: job.credits ?? deduction.credits ?? null,
+      });
+    } catch (error: any) {
+      this.logger.error(
+        `Failed to persist deep research job ${jobId}`,
+        error?.stack || error?.message || `${error}`,
+      );
+    }
+
     const generateInput: GeneratePayload = {
       prompt: request.prompt,
       model: request.model,
@@ -162,18 +189,31 @@ export class AiService {
 
   async getJob(jobId: string, userId: string): Promise<JobStatusResponse> {
     const job = this.jobs.get(jobId);
-    if (!job || job.userId !== userId) {
+    if (job && job.userId === userId) {
+      return {
+        jobId: job.id,
+        status: job.status,
+        message: job.message,
+        credits: job.credits,
+        updatedAt: job.updatedAt,
+        content: job.status === 'completed' ? job.content ?? undefined : undefined,
+        error: job.status === 'failed' ? job.error ?? 'Deep research failed.' : undefined,
+      };
+    }
+
+    const record = await this.userLetters.getJobStatus(userId, jobId);
+    if (!record) {
       throw new NotFoundException('Deep research request not found');
     }
 
     return {
-      jobId: job.id,
-      status: job.status,
-      message: job.message,
-      credits: job.credits,
-      updatedAt: job.updatedAt,
-      content: job.status === 'completed' ? job.content ?? undefined : undefined,
-      error: job.status === 'failed' ? job.error ?? 'Deep research failed.' : undefined,
+      jobId: record.jobId,
+      status: record.status,
+      message: record.message,
+      credits: record.credits,
+      updatedAt: record.updatedAt,
+      content: record.content,
+      error: record.error,
     };
   }
 
@@ -184,6 +224,7 @@ export class AiService {
         status: 'completed',
         message: 'Deep research completed. Draft ready.',
         content,
+        error: null,
       });
       this.scheduleCleanup(job.id, JOB_CLEANUP_MS);
     } catch (error: any) {
@@ -198,6 +239,7 @@ export class AiService {
         message,
         error: message,
         credits: refund?.credits ?? job.credits,
+        content: null,
       });
       this.scheduleCleanup(job.id, FAILED_JOB_CLEANUP_MS);
     }
@@ -213,9 +255,33 @@ export class AiService {
   }
 
   private updateJob(job: JobRecord, patch: Partial<JobRecord>) {
-    if (!this.jobs.has(job.id)) return;
-    Object.assign(job, patch);
-    job.updatedAt = Date.now();
+    const target = this.jobs.get(job.id) ?? job;
+    Object.assign(target, patch);
+    target.updatedAt = Date.now();
+    this.persistJobRecord(target, patch);
+  }
+
+  private persistJobRecord(job: JobRecord, patch?: Partial<JobRecord>) {
+    const contentProvided =
+      patch && Object.prototype.hasOwnProperty.call(patch, 'content') ? patch.content ?? null : undefined;
+
+    void this.userLetters
+      .syncJobState({
+        userId: job.userId,
+        jobId: job.id,
+        status: job.status,
+        message: job.message,
+        credits: job.credits ?? null,
+        error: job.error ?? null,
+        lastResponseId: job.lastResponseId ?? null,
+        content: contentProvided,
+      })
+      .catch((error: any) => {
+        this.logger.error(
+          `Failed to update stored deep research job ${job.id}`,
+          error?.stack || error?.message || `${error}`,
+        );
+      });
   }
 
   private async performDeepResearch(
@@ -260,7 +326,7 @@ export class AiService {
 
     const researchExpectations = `Research objectives:\n1. Understand the constituent's issue and the outcomes they want.\n2. Identify relevant UK policies, legislation, votes, or programmes the MP can influence.\n3. Gather recent statistics, official statements, or expert findings that strengthen the case.\n4. Surface any timelines, upcoming debates, or consultations the MP should note.`;
 
-    const outputExpectations = `Output requirements:\n- Compose the complete letter within 500 words.\n- Keep the tone ${tone ? tone.toLowerCase() : 'respectful and persuasive'}.\n- Weave evidence-backed arguments that align with the constituent's goals.\n- Present a bulleted list of specific actions for the MP.\n- Return valid HTML only, with semantic tags and no surrounding <html> or <body>.\n- Structure:\n  <div class=\"letter\">\n    <p>Sender address</p>\n    <p>MP greeting</p>\n    <p>Letter body with inline citation numbers like [1]</p>\n    <ul>Bullet actions for the MP</ul>\n    <p>Closing and signature</p>\n    <h3>References</h3>\n    <ol>\n      <li><a href=\"URL\" rel=\"noopener noreferrer\">Title — Source (Year)</a></li>\n    </ol>\n  </div>`;
+    const outputExpectations = `Output requirements:\n- Compose the complete letter within 500 words.\n- Keep the tone ${tone ? tone.toLowerCase() : 'respectful and persuasive'}.\n- Weave evidence-backed arguments that align with the constituent's goals.\n- Present a bulleted list of specific actions for the MP.\n- Return valid HTML only, with semantic tags and no surrounding <html> or <body>.\n- Structure:\n  <div class="letter">\n    <p>Sender address</p>\n    <p>MP greeting</p>\n    <p>Letter body with inline citation numbers like [1]</p>\n    <ul>Bullet actions for the MP</ul>\n    <p>Closing and signature</p>\n    <h3>References</h3>\n    <ol>\n      <li><a href="URL" rel="noopener noreferrer">Title — Source (Year)</a></li>\n    </ol>\n  </div>`;
 
     const userPrompt = `${audienceLine}\n${senderLine}\n${toneInstruction}\n\n${researchExpectations}\n\nIssue summary from the constituent:\n${input.prompt.trim()}\n\n${supportingDetailBlock}\n\n${outputExpectations}\n\nUsing the guidance above, research thoroughly and draft the full letter with inline citations and the required reference list.`;
 
@@ -325,9 +391,9 @@ export class AiService {
     });
 
     const initial = await client.responses.create(responseParams);
-    job.lastResponseId = initial.id;
     this.updateJob(job, {
       message: 'Deep research initiated. Gathering sources…',
+      lastResponseId: initial.id,
     });
 
     const responseId = initial.id;
