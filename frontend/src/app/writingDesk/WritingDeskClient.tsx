@@ -458,19 +458,37 @@ export default function WritingDeskClient() {
     root.innerHTML = html;
 
     // 1) Locate References heading and list
-    const heading = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6')).find((h) =>
+    const headingCandidate = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6')).find((h) =>
       /^references\b/i.test((h.textContent || '').trim()),
     );
-    const refsList = heading
-      ? (heading.nextElementSibling && /^(ol|ul)$/i.test(heading.nextElementSibling.tagName)
-          ? (heading.nextElementSibling as HTMLOListElement | HTMLUListElement)
-          : (heading.parentElement?.querySelector('ol,ul') as HTMLOListElement | HTMLUListElement | null))
-      : null;
+    const headingElement = headingCandidate ?? null;
+    let refsList: HTMLOListElement | HTMLUListElement | null = null;
+
+    if (headingElement != null) {
+      const element = headingElement as Element;
+      const sibling = element.nextElementSibling;
+      if (sibling) {
+        const siblingElement = sibling as Element;
+        const siblingTag = siblingElement.tagName;
+        if (/^(ol|ul)$/i.test(siblingTag)) {
+          refsList = siblingElement as HTMLOListElement | HTMLUListElement;
+        }
+      }
+
+      if (!refsList) {
+        const parentList = element.parentElement?.querySelector('ol,ul');
+        if (parentList) {
+          refsList = parentList as HTMLOListElement | HTMLUListElement;
+        }
+      }
+    }
 
     if (!refsList) {
       // Nothing to map to; just return input
       return root.innerHTML;
     }
+
+    const refsListElement = refsList!;
 
     // 2) Build URL -> index map from references
     const urlToIndex = new Map<string, number>();
@@ -484,7 +502,7 @@ export default function WritingDeskClient() {
       }
     };
 
-    const items = Array.from(refsList.querySelectorAll('li'));
+    const items = Array.from(refsListElement.querySelectorAll('li'));
     items.forEach((li, i) => {
       const a = li.querySelector('a[href]') as HTMLAnchorElement | null;
       if (!a || !a.href) return;
@@ -495,7 +513,7 @@ export default function WritingDeskClient() {
     });
     let nextIndex = items.length + 1;
 
-    const appendReference = (href: string) => {
+    const appendReference = (href: string): number => {
       // Avoid duplicates after normalisation
       const norm = normalise(href);
       const existing = urlToIndex.get(norm);
@@ -513,7 +531,7 @@ export default function WritingDeskClient() {
         a.textContent = href;
       }
       li.appendChild(a);
-      refsList.appendChild(li);
+      refsListElement.appendChild(li);
       const assigned = nextIndex++;
       li.id = `ref-${assigned}`;
       urlToIndex.set(norm, assigned);
@@ -522,8 +540,7 @@ export default function WritingDeskClient() {
 
     // 3) Walk body (before references list) replacing anchors and parenthetical URLs
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
-    let node: Node | null = walker.nextNode();
-    const until = refsList as Node;
+    const until = refsListElement as Node;
     const citationClass = 'citation';
 
     const replaceAnchorWithCitation = (a: HTMLAnchorElement) => {
@@ -532,6 +549,7 @@ export default function WritingDeskClient() {
       if (!index) {
         index = appendReference(a.href || '');
       }
+      if (!index) return;
       const cite = document.createElement('a');
       cite.href = `#ref-${index}`;
       cite.className = citationClass;
@@ -539,10 +557,15 @@ export default function WritingDeskClient() {
       a.replaceWith(cite);
     };
 
-    while (node && node !== until) {
+    while (true) {
+      const next = walker.nextNode();
+      if (!next || next === until) {
+        break;
+      }
+      const currentNode = next as Node;
       // Replace anchors in the body
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as Element;
+      if (currentNode.nodeType === Node.ELEMENT_NODE) {
+        const el = currentNode as Element;
         // Stop walking into references section
         if (el === until) break;
         if (el.matches('a[href]')) {
@@ -551,18 +574,27 @@ export default function WritingDeskClient() {
       }
 
       // Replace parenthetical raw URLs within text nodes: (https://...)
-      if (node.nodeType === Node.TEXT_NODE && node.parentElement && !(refsList.contains(node))) {
-        const text = node.textContent || '';
+      if (
+        currentNode.nodeType === Node.TEXT_NODE &&
+        currentNode.parentElement &&
+        !refsListElement.contains(currentNode)
+      ) {
+        const text = currentNode.textContent || '';
         const regex = /\((https?:\/\/[^)\s]+)\)/g;
-        if (regex.test(text)) {
+        const matches = Array.from(text.matchAll(regex));
+        if (matches.length > 0) {
           const frag = document.createDocumentFragment();
           let lastIndex = 0;
-          let m: RegExpExecArray | null;
-          regex.lastIndex = 0;
-          while ((m = regex.exec(text))) {
-            const before = text.slice(lastIndex, m.index);
+          for (const match of matches) {
+            const matchIndex = match.index ?? 0;
+            const before = text.slice(lastIndex, matchIndex);
             if (before) frag.appendChild(document.createTextNode(before));
-            const url = m[1];
+            const url = match[1];
+            if (!url) {
+              frag.appendChild(document.createTextNode(match[0]));
+              lastIndex = matchIndex + match[0].length;
+              continue;
+            }
             let idx = urlToIndex.get(normalise(url));
             if (!idx) idx = appendReference(url);
             if (idx) {
@@ -573,19 +605,16 @@ export default function WritingDeskClient() {
               frag.appendChild(cite);
             } else {
               // Not in references; keep as original parentheses
-              frag.appendChild(document.createTextNode(m[0]));
+              frag.appendChild(document.createTextNode(match[0]));
             }
-            lastIndex = regex.lastIndex;
+            lastIndex = matchIndex + match[0].length;
           }
           const tail = text.slice(lastIndex);
           if (tail) frag.appendChild(document.createTextNode(tail));
-          if (node.parentNode) {
-            node.parentNode.replaceChild(frag, node);
-          }
+          currentNode.parentNode?.replaceChild(frag, currentNode);
         }
       }
 
-      node = walker.nextNode();
     }
 
     let output = root.innerHTML;
