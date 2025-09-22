@@ -19,10 +19,6 @@ export default function AnimatedBackground() {
         const container = containerRef.current;
         if (!container) return;
 
-        let renderer: any;
-        let scene: any;
-        let camera: any;
-        let instanced: any;
         const tmpObj = new THREE.Object3D();
 
         const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -35,11 +31,11 @@ export default function AnimatedBackground() {
         const ROT_X = prefersReduced ? 0.0003 : 0.0007;
         const ROT_Y = prefersReduced ? 0.0006 : 0.0012;
 
-        scene = new THREE.Scene();
-        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 1000);
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 1000);
         camera.position.set(0, 0, 60);
 
-        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.outputEncoding = THREE.sRGBEncoding;
@@ -57,7 +53,7 @@ export default function AnimatedBackground() {
           transparent: true,
           opacity: 0.5,
         });
-        instanced = new THREE.InstancedMesh(unitPlane, material, INSTANCE_COUNT);
+        const instanced = new THREE.InstancedMesh(unitPlane, material, INSTANCE_COUNT);
         const velocities: number[] = new Array(INSTANCE_COUNT);
         const rotSpeeds: number[] = new Array(INSTANCE_COUNT * 2);
 

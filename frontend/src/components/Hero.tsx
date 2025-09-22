@@ -35,7 +35,7 @@ export default function Hero() {
           <div className="step-icon" aria-hidden>1</div>
           <div>
             <div className="step-title">Look up your MP</div>
-            <div className="step-sub">We'll find your MP for you from your address.</div>
+            <div className="step-sub">We’ll find your MP for you from your address.</div>
           </div>
         </div>
         {/* Step 2 */}

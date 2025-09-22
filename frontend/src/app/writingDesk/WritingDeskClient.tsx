@@ -209,7 +209,7 @@ export default function WritingDeskClient() {
           });
           setContextMessage('');
         }
-      } catch (err) {
+      } catch {
         if (!cancelled) setContextMessage('We could not load your saved details.');
       }
     })();
@@ -637,7 +637,6 @@ export default function WritingDeskClient() {
       const until2 = refsList2 as Node | null;
       const walker2 = document.createTreeWalker(root2, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
       let node2: Node | null = walker2.nextNode();
-      const urlLike2 = /^(?:https?:\/\/|www\.)/i;
 
       while (node2 && node2 !== until2) {
         if (node2.nodeType === Node.ELEMENT_NODE) {
@@ -916,7 +915,7 @@ export default function WritingDeskClient() {
         setJobMessage(null);
         clearStoredActiveJobId();
       });
-    } catch (err) {
+    } catch {
       clearJobPolling();
       setError('We could not connect to the AI service. Please try again shortly.');
       setIsGenerating(false);
@@ -1256,7 +1255,7 @@ export default function WritingDeskClient() {
           ) : historyError ? (
             <p className="error-text">{historyError}</p>
           ) : history.length === 0 ? (
-            <p>You haven't generated any letters yet. Your drafts will appear here once ready.</p>
+            <p>You haven&apos;t generated any letters yet. Your drafts will appear here once ready.</p>
           ) : (
             <ul className="saved-letter-list">
               {history.map((item) => (

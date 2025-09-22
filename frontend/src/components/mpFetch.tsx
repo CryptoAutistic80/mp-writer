@@ -57,7 +57,7 @@ export default function MpFetch({ onPostcodeChange }: MpFetchProps) {
           body: JSON.stringify({ constituency: json.constituency, mp: json.mp ?? null }),
         });
       } catch {}
-    } catch (err: any) {
+    } catch {
       setError('We couldn\'t find a match for that postcode.');
     } finally {
       setLoading(false);

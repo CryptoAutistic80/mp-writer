@@ -57,7 +57,7 @@ export default function DashboardPage() {
         setPurchaseStatus('Credits added to your account.');
         setPurchaseStatusType('success');
       }
-    } catch (error) {
+    } catch {
       setPurchaseStatus('Unable to connect to the server. Please try again.');
       setPurchaseStatusType('error');
     }

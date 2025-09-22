@@ -4,7 +4,6 @@ module.exports = {
     'dist',
     'node_modules',
     'tmp',
-    'frontend',
     'frontend-e2e',
     'backend-api-e2e',
     'nest-modules'

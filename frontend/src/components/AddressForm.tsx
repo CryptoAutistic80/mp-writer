@@ -25,7 +25,7 @@ type AddressFormProps = {
 
 export default function AddressForm({ seedPostcode }: AddressFormProps) {
   const [postcode, setPostcode] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [_loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selected, setSelected] = useState<Address | null>(null);
@@ -96,7 +96,7 @@ export default function AddressForm({ seedPostcode }: AddressFormProps) {
       }
       setAddresses(items);
       if (!items.length) setError('No addresses found for that postcode.');
-    } catch (err) {
+    } catch {
       setError('Address lookup failed. You can enter it manually.');
       setAddresses([]);
     } finally {
@@ -259,7 +259,7 @@ export default function AddressForm({ seedPostcode }: AddressFormProps) {
               ))}
             </select>
             <div style={{ marginTop: 8 }}>
-              <button type="button" className="btn-link" onClick={() => setManual(true)}>Can't find it? Enter manually</button>
+              <button type="button" className="btn-link" onClick={() => setManual(true)}>Can’t find it? Enter manually</button>
             </div>
           </div>
         )}

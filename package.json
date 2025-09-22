@@ -32,6 +32,7 @@
     "@types/three": "^0.180.0",
     "@typescript-eslint/eslint-plugin": "^8.44.0",
     "@typescript-eslint/parser": "^8.44.0",
+    "eslint-config-next": "^15.2.4",
     "nx": "21.4.1",
     "prettier": "^2.6.2",
     "three": "^0.150.1",
