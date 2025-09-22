@@ -31,30 +31,72 @@ export class UsersService {
       .findOne({ provider: input.provider, providerId: input.providerId })
       .lean();
     if (existingAccount) {
-      const user = await this.userModel.findById(existingAccount.user).lean();
-      if (user) return user;
+      const accountUserId = (existingAccount.user as any)?.toString?.();
+      if (accountUserId) {
+        const user = await this.userModel.findById(accountUserId).lean();
+        if (user) {
+          await this.syncProfileFields(accountUserId, input, user);
+          return this.userModel.findById(accountUserId).lean();
+        }
+      }
     }
 
     // Fall back to email if available
-    let user = input.email ? await this.userModel.findOne({ email: input.email }) : null;
+    let user = input.email ? await this.userModel.findOne({ email: input.email }).lean() : null;
+    let userId = (user as any)?._id?.toString?.();
+
     if (!user) {
-      user = await this.userModel.create({
+      const created = await this.userModel.create({
         email: input.email ?? `${input.provider}:${input.providerId}@example.invalid`,
         name: input.name,
         image: input.image,
       });
+      userId = (created as any)?._id?.toString?.();
+      user = created.toObject();
+    }
+
+    if (!userId) {
+      userId = (user as any)?._id?.toString?.();
+    }
+
+    if (!userId) {
+      return user;
     }
 
     // Ensure account mapping exists
     await this.accountModel.updateOne(
       { provider: input.provider, providerId: input.providerId },
-      { $setOnInsert: { user: (user as any)._id, provider: input.provider, providerId: input.providerId } },
+      { $setOnInsert: { user: userId, provider: input.provider, providerId: input.providerId } },
       { upsert: true }
     );
 
+    await this.syncProfileFields(userId, input, user as any);
+
     // Return lean
-    const lean = await this.userModel.findById((user as any)._id).lean();
+    const lean = await this.userModel.findById(userId).lean();
     return lean;
+  }
+
+  private async syncProfileFields(
+    userId: string,
+    input: { name?: string; image?: string },
+    existing: Partial<User> | null,
+  ) {
+    const updates: Partial<User> = {};
+
+    const nextName = input.name?.trim();
+    if (nextName && nextName !== existing?.name) {
+      updates.name = nextName;
+    }
+
+    const nextImage = input.image;
+    if (nextImage && nextImage !== existing?.image) {
+      updates.image = nextImage;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await this.userModel.updateOne({ _id: userId }, { $set: updates });
+    }
   }
 }
 
