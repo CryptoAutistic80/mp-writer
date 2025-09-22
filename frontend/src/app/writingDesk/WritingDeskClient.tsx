@@ -1,7 +1,7 @@
 "use client";
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DeepResearchProgress from '../../components/DeepResearchProgress';
 
 const QUESTIONS: { id: string; prompt: string }[] = [
@@ -28,6 +28,76 @@ type UserContext = {
   addressLine: string;
 };
 
+const ACTIVE_JOB_STORAGE_KEY = 'mpw-active-job';
+
+type LetterSummary = {
+  jobId: string;
+  prompt: string;
+  mpName?: string;
+  constituency?: string;
+  tone?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type LetterDetail = LetterSummary & {
+  content: string;
+};
+
+type LetterMetadata = {
+  jobId: string;
+  prompt: string;
+  mpName?: string;
+  constituency?: string;
+  tone?: string;
+  createdAt: number;
+  completedAt?: number | null;
+  source: 'current' | 'history';
+};
+
+function getStoredActiveJobId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage.getItem(ACTIVE_JOB_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeActiveJobId(jobId: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(ACTIVE_JOB_STORAGE_KEY, jobId);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function clearStoredActiveJobId() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function formatDisplayDate(timestamp: number) {
+  try {
+    return new Date(timestamp).toLocaleString('en-GB', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+  } catch {
+    return new Date(timestamp).toLocaleString();
+  }
+}
+
+function resolveToneLabel(toneId?: string) {
+  if (!toneId) return '';
+  return TONES.find((item) => item.id === toneId)?.label ?? toneId;
+}
+
 export default function WritingDeskClient() {
   const [phase, setPhase] = useState<Phase>('issue');
   const [issue, setIssue] = useState('');
@@ -42,7 +112,56 @@ export default function WritingDeskClient() {
   const [notice, setNotice] = useState<string | null>(null);
   const [jobMessage, setJobMessage] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [letterMetadata, setLetterMetadata] = useState<LetterMetadata | null>(null);
+  const [history, setHistory] = useState<LetterSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refreshHistory = useCallback(async () => {
+    setHistoryError(null);
+    setHistoryLoading(true);
+    try {
+      const res = await fetch('/api/ai/letters', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        throw new Error('Failed to load saved letters');
+      }
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        const mapped = data
+          .map((item: any) => {
+            if (!item || typeof item.jobId !== 'string') return null;
+            const prompt = typeof item.prompt === 'string' ? item.prompt : '';
+            const createdAtCandidate = Number(item.createdAt ?? item.updatedAt ?? Date.now());
+            const updatedAtCandidate = Number(item.updatedAt ?? item.createdAt ?? createdAtCandidate);
+            const createdAt = Number.isFinite(createdAtCandidate) ? createdAtCandidate : Date.now();
+            const updatedAt = Number.isFinite(updatedAtCandidate) ? updatedAtCandidate : createdAt;
+            const summary: LetterSummary = {
+              jobId: item.jobId,
+              prompt,
+              mpName: typeof item.mpName === 'string' ? item.mpName : undefined,
+              constituency: typeof item.constituency === 'string' ? item.constituency : undefined,
+              tone: typeof item.tone === 'string' ? item.tone : undefined,
+              createdAt,
+              updatedAt,
+            };
+            return summary;
+          })
+          .filter((entry): entry is LetterSummary => Boolean(entry?.jobId));
+        setHistory(mapped);
+      } else {
+        setHistory([]);
+      }
+    } catch {
+      setHistoryError('We could not load your saved letters.');
+      setHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,12 +219,67 @@ export default function WritingDeskClient() {
   }, []);
 
   useEffect(() => {
+    refreshHistory().catch(() => {
+      // errors handled inside refreshHistory
+    });
+  }, [refreshHistory]);
+
+  useEffect(() => {
     return () => {
       if (pollTimeoutRef.current) {
         clearTimeout(pollTimeoutRef.current);
       }
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const resumeJob = async (jobId: string) => {
+      if (cancelled) return;
+      setActiveJobId(jobId);
+      setIsGenerating(true);
+      setNotice(null);
+      setJobMessage('Resuming your deep research request…');
+      try {
+        await pollJob(jobId);
+      } catch {
+        if (!cancelled) {
+          clearJobPolling();
+          setIsGenerating(false);
+          setActiveJobId(null);
+          setJobMessage(null);
+          clearStoredActiveJobId();
+        }
+      }
+    };
+
+    const existing = getStoredActiveJobId();
+    if (existing) {
+      void resumeJob(existing);
+    } else {
+      (async () => {
+        try {
+          const res = await fetch('/api/ai/jobs/active', {
+            credentials: 'include',
+            cache: 'no-store',
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data && typeof data.jobId === 'string') {
+            storeActiveJobId(data.jobId);
+            await resumeJob(data.jobId);
+          }
+        } catch {
+          // ignore connection issues
+        }
+      })();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pollJob]);
 
   const remainingCredits = context?.credits ?? 0;
 
@@ -191,63 +365,111 @@ export default function WritingDeskClient() {
     }
   }
 
-  async function pollJob(jobId: string) {
-    try {
-      const res = await fetch(`/api/ai/generate/${jobId}`, {
-        credentials: 'include',
-      });
+  const pollJob = useCallback(
+    async (jobId: string) => {
+      try {
+        const res = await fetch(`/api/ai/generate/${jobId}`, {
+          credentials: 'include',
+        });
 
-      if (!res.ok) {
-        throw new Error('Failed to fetch job status');
-      }
+        if (!res.ok) {
+          throw new Error('Failed to fetch job status');
+        }
 
-      const data = await res.json();
+        const data = await res.json();
 
-      if (typeof data?.credits === 'number') {
-        setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
-      }
+        if (typeof data?.credits === 'number') {
+          setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
+        }
 
-      if (typeof data?.message === 'string') {
-        setJobMessage(data.message);
-      }
+        if (typeof data?.prompt === 'string') {
+          setIssue(data.prompt);
+        }
 
-      if (data?.status === 'completed' && typeof data?.content === 'string') {
-        clearJobPolling();
-        const html = normaliseLetterHtml(data.content);
-        setLetter(enhanceCitations(html));
-        setPhase('result');
-        setIsGenerating(false);
-        setActiveJobId(null);
-        setJobMessage(null);
-        return;
-      }
+        if (Array.isArray(data?.details)) {
+          const mapped: Record<string, string> = {};
+          for (const detail of data.details as any[]) {
+            if (!detail || typeof detail.question !== 'string' || typeof detail.answer !== 'string') continue;
+            const match = QUESTIONS.find((item) => item.prompt === detail.question);
+            if (match) {
+              mapped[match.id] = detail.answer;
+            }
+          }
+          if (Object.keys(mapped).length > 0) {
+            setAnswers((prev) => ({ ...prev, ...mapped }));
+          }
+        }
 
-      if (data?.status === 'failed') {
-        clearJobPolling();
-        setError(data?.error || 'The AI service was unable to draft your letter just now.');
-        setIsGenerating(false);
-        setActiveJobId(null);
-        setJobMessage(null);
-        return;
-      }
+        if (typeof data?.tone === 'string' && TONES.some((item) => item.id === data.tone)) {
+          setTone(data.tone);
+        }
 
-      pollTimeoutRef.current = setTimeout(() => {
-        pollJob(jobId).catch(() => {
+        if (typeof data?.message === 'string') {
+          setJobMessage(data.message);
+        }
+
+        if (data?.status === 'completed' && typeof data?.content === 'string') {
           clearJobPolling();
-          setError('We could not connect to the AI service. Please try again shortly.');
+          const html = normaliseLetterHtml(data.content);
+          setLetter(enhanceCitations(html));
+          const completedAt =
+            typeof data?.completedAt === 'number'
+              ? data.completedAt
+              : typeof data?.updatedAt === 'number'
+              ? data.updatedAt
+              : Date.now();
+          setLetterMetadata({
+            jobId: data.jobId,
+            prompt: typeof data.prompt === 'string' ? data.prompt : '',
+            mpName: typeof data.mpName === 'string' ? data.mpName : undefined,
+            constituency: typeof data.constituency === 'string' ? data.constituency : undefined,
+            tone: typeof data.tone === 'string' ? data.tone : undefined,
+            createdAt: completedAt,
+            completedAt: typeof data.completedAt === 'number' ? data.completedAt : undefined,
+            source: 'current',
+          });
+          setPhase('result');
           setIsGenerating(false);
           setActiveJobId(null);
           setJobMessage(null);
-        });
-      }, 5000);
-    } catch (err) {
-      clearJobPolling();
-      setError('We could not connect to the AI service. Please try again shortly.');
-      setIsGenerating(false);
-      setActiveJobId(null);
-      setJobMessage(null);
-    }
-  }
+          clearStoredActiveJobId();
+          void refreshHistory();
+          return;
+        }
+
+        if (data?.status === 'failed') {
+          clearJobPolling();
+          setError(data?.error || 'The AI service was unable to draft your letter just now.');
+          setLetterMetadata(null);
+          setIsGenerating(false);
+          setActiveJobId(null);
+          setJobMessage(null);
+          clearStoredActiveJobId();
+          return;
+        }
+
+        pollTimeoutRef.current = setTimeout(() => {
+          pollJob(jobId).catch(() => {
+            clearJobPolling();
+            setError('We could not connect to the AI service. Please try again shortly.');
+            setIsGenerating(false);
+            setActiveJobId(null);
+            setJobMessage(null);
+            clearStoredActiveJobId();
+          });
+        }, 5000);
+      } catch {
+        clearJobPolling();
+        setError('We could not connect to the AI service. Please try again shortly.');
+        setLetterMetadata(null);
+        setIsGenerating(false);
+        setActiveJobId(null);
+        setJobMessage(null);
+        clearStoredActiveJobId();
+      }
+    },
+    [refreshHistory],
+  );
 
   function normaliseLetterHtml(raw: string): string {
     let s = (raw || '').trim();
@@ -625,12 +847,14 @@ export default function WritingDeskClient() {
     if (activeJobId) {
       clearJobPolling();
       setActiveJobId(null);
+      clearStoredActiveJobId();
     }
 
     setIsGenerating(true);
     setError(null);
     setNotice(null);
     setLetter(null);
+    setLetterMetadata(null);
     setJobMessage('Submitting your deep research request…');
     try {
       const details = QUESTIONS.map((question) => ({
@@ -664,6 +888,7 @@ export default function WritingDeskClient() {
         setIsGenerating(false);
         setJobMessage(null);
         setError('The AI service was unable to draft your letter just now.');
+        clearStoredActiveJobId();
         return;
       }
 
@@ -682,12 +907,14 @@ export default function WritingDeskClient() {
       }
 
       setActiveJobId(data.jobId);
+      storeActiveJobId(data.jobId);
       pollJob(data.jobId).catch(() => {
         clearJobPolling();
         setError('We could not connect to the AI service. Please try again shortly.');
         setIsGenerating(false);
         setActiveJobId(null);
         setJobMessage(null);
+        clearStoredActiveJobId();
       });
     } catch (err) {
       clearJobPolling();
@@ -695,6 +922,62 @@ export default function WritingDeskClient() {
       setIsGenerating(false);
       setActiveJobId(null);
       setJobMessage(null);
+      clearStoredActiveJobId();
+    }
+  }
+
+  async function handleSelectLetter(jobId: string) {
+    clearJobPolling();
+    setIsGenerating(false);
+    setActiveJobId(null);
+    clearStoredActiveJobId();
+    setJobMessage(null);
+    setNotice(null);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/ai/letters/${jobId}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        throw new Error('Failed to load letter');
+      }
+      const data: LetterDetail = await res.json();
+      if (!data || typeof data.content !== 'string') {
+        throw new Error('Letter content missing');
+      }
+      const html = normaliseLetterHtml(data.content);
+      setLetter(enhanceCitations(html));
+      if (typeof data.prompt === 'string') {
+        setIssue(data.prompt);
+      }
+      if (typeof data.tone === 'string' && TONES.some((item) => item.id === data.tone)) {
+        setTone(data.tone);
+      }
+      const updatedTimestamp = Number(data.updatedAt);
+      const createdTimestamp = Number(data.createdAt);
+      const generatedAt = Number.isFinite(updatedTimestamp)
+        ? updatedTimestamp
+        : Number.isFinite(createdTimestamp)
+        ? createdTimestamp
+        : Date.now();
+      setLetterMetadata({
+        jobId: data.jobId,
+        prompt: typeof data.prompt === 'string' ? data.prompt : '',
+        mpName: typeof data.mpName === 'string' ? data.mpName : undefined,
+        constituency: typeof data.constituency === 'string' ? data.constituency : undefined,
+        tone: typeof data.tone === 'string' ? data.tone : undefined,
+        createdAt: generatedAt,
+        completedAt: Number.isFinite(updatedTimestamp) ? updatedTimestamp : undefined,
+        source: 'history',
+      });
+      setPhase('result');
+      setNotice('Loaded saved letter.');
+      setTimeout(() => setNotice(null), 2000);
+    } catch {
+      setError('We could not load that saved letter. Please try again.');
+      setTimeout(() => setError(null), 3000);
     }
   }
 
@@ -917,6 +1200,35 @@ export default function WritingDeskClient() {
                 </button>
               </div>
             </header>
+            {letterMetadata && (
+              <div className="letter-meta">
+                <p>
+                  <strong>Generated:</strong> {formatDisplayDate(letterMetadata.createdAt)}
+                </p>
+                {letterMetadata.prompt && (
+                  <p>
+                    <strong>Issue:</strong> {letterMetadata.prompt}
+                  </p>
+                )}
+                {(letterMetadata.mpName || letterMetadata.constituency) && (
+                  <p>
+                    <strong>MP:</strong>{' '}
+                    {letterMetadata.mpName || 'Your MP'}
+                    {letterMetadata.constituency ? ` — ${letterMetadata.constituency}` : ''}
+                  </p>
+                )}
+                {letterMetadata.tone && (
+                  <p>
+                    <strong>Tone:</strong> {resolveToneLabel(letterMetadata.tone)}
+                  </p>
+                )}
+                {letterMetadata.source === 'history' && (
+                  <p>
+                    <em>This draft was loaded from your saved letters.</em>
+                  </p>
+                )}
+              </div>
+            )}
             <article className="letter-output" aria-live="polite">
               {letter ? (
                 <div
@@ -935,6 +1247,50 @@ export default function WritingDeskClient() {
           </div>
         </section>
       )}
+
+      <section className="card">
+        <div className="container saved-letters-section">
+          <h2 className="section-title">Saved letters</h2>
+          {historyLoading ? (
+            <p>Loading your saved letters…</p>
+          ) : historyError ? (
+            <p className="error-text">{historyError}</p>
+          ) : history.length === 0 ? (
+            <p>You haven't generated any letters yet. Your drafts will appear here once ready.</p>
+          ) : (
+            <ul className="saved-letter-list">
+              {history.map((item) => (
+                <li key={item.jobId} className="saved-letter-item">
+                  <div>
+                    <h3>{item.prompt || 'Letter to your MP'}</h3>
+                    <p className="saved-letter-meta">
+                      {[
+                        `Generated ${formatDisplayDate(item.updatedAt)}`,
+                        item.mpName
+                          ? `MP: ${item.mpName}${item.constituency ? ` (${item.constituency})` : ''}`
+                          : null,
+                        item.tone ? `Tone: ${resolveToneLabel(item.tone)}` : null,
+                      ]
+                        .filter((part): part is string => Boolean(part))
+                        .join(' · ')}
+                    </p>
+                  </div>
+                  <div className="saved-letter-actions">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => handleSelectLetter(item.jobId)}
+                      disabled={isGenerating}
+                    >
+                      View letter
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
 
       {isGenerating && (
         <section className="card" aria-live="polite">

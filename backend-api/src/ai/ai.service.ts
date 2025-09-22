@@ -9,6 +9,12 @@ import { FollowUpDetailDto } from './dto/generate.dto';
 import { UserCreditsService } from '../user-credits/user-credits.service';
 import { UserMpService } from '../user-mp/user-mp.service';
 import { UserAddressService } from '../user-address-store/user-address.service';
+import {
+  AiJobStoreService,
+  AiJobSnapshot,
+  AiLetterDetail,
+  AiLetterSummary,
+} from './ai-job-store.service';
 
 const DEFAULT_MODEL = 'o4-mini-deep-research';
 const DEFAULT_POLL_INTERVAL_MS = 5000;
@@ -30,10 +36,18 @@ interface JobRecord {
   message: string;
   createdAt: number;
   updatedAt: number;
+  prompt: string;
+  tone?: string;
+  details: FollowUpDetailDto[];
+  mpName?: string;
+  constituency?: string;
+  userName?: string;
+  userAddressLine?: string;
   content?: string | null;
   error?: string | null;
   credits?: number;
-  lastResponseId?: string;
+  lastResponseId?: string | null;
+  completedAt?: number | null;
 }
 
 interface GenerateJobRequest {
@@ -72,8 +86,17 @@ interface JobStatusResponse {
   message: string;
   credits: number | undefined;
   updatedAt: number;
+  createdAt: number;
+  completedAt?: number | null;
   content?: string;
   error?: string;
+  prompt: string;
+  tone?: string;
+  details: FollowUpDetailDto[];
+  mpName?: string;
+  constituency?: string;
+  userName?: string;
+  userAddressLine?: string;
 }
 
 @Injectable()
@@ -86,6 +109,7 @@ export class AiService {
     private readonly userCredits: UserCreditsService,
     private readonly userMp: UserMpService,
     private readonly userAddress: UserAddressService,
+    private readonly jobsStore: AiJobStoreService,
   ) {}
 
   async enqueueGenerate(request: GenerateJobRequest): Promise<GenerateJobResponse> {
@@ -122,24 +146,56 @@ export class AiService {
       throw error;
     }
 
+    const prompt = request.prompt.trim();
+    const detailEntries: FollowUpDetailDto[] = (request.details ?? []).map((item) => ({
+      question: item.question,
+      answer: item.answer,
+    }));
+
     const jobId = randomUUID();
-    const job: JobRecord = {
-      id: jobId,
+    const snapshot = await this.jobsStore.create({
+      jobId,
       userId,
       status: 'in_progress',
       message: 'Starting deep research…',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      prompt,
+      tone: request.tone,
+      details: detailEntries,
+      mpName,
+      constituency,
+      userName: request.userName || '',
+      userAddressLine: addressLine,
       credits: deduction.credits,
+    });
+
+    const job: JobRecord = {
+      id: snapshot.jobId,
+      userId: snapshot.userId,
+      status: snapshot.status,
+      message: snapshot.message,
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      prompt: snapshot.prompt,
+      tone: snapshot.tone,
+      details: snapshot.details,
+      mpName: snapshot.mpName,
+      constituency: snapshot.constituency,
+      userName: snapshot.userName,
+      userAddressLine: snapshot.userAddressLine,
+      content: snapshot.content ?? null,
+      error: snapshot.error ?? null,
+      credits: snapshot.credits,
+      lastResponseId: snapshot.lastResponseId ?? null,
+      completedAt: snapshot.completedAt ?? null,
     };
 
     this.jobs.set(jobId, job);
 
     const generateInput: GeneratePayload = {
-      prompt: request.prompt,
+      prompt,
       model: request.model,
       tone: request.tone,
-      details: request.details,
+      details: detailEntries,
       mpName,
       constituency,
       userName: request.userName || '',
@@ -161,29 +217,63 @@ export class AiService {
   }
 
   async getJob(jobId: string, userId: string): Promise<JobStatusResponse> {
-    const job = this.jobs.get(jobId);
-    if (!job || job.userId !== userId) {
+    const snapshot = await this.jobsStore.findForUser(jobId, userId);
+    if (!snapshot) {
       throw new NotFoundException('Deep research request not found');
     }
 
+    return this.toJobStatusResponse(snapshot);
+  }
+
+  async getActiveJob(userId: string): Promise<JobStatusResponse | null> {
+    const snapshot = await this.jobsStore.findActiveForUser(userId);
+    return snapshot ? this.toJobStatusResponse(snapshot) : null;
+  }
+
+  async listLetters(userId: string): Promise<AiLetterSummary[]> {
+    return this.jobsStore.listLetters(userId);
+  }
+
+  async getLetter(jobId: string, userId: string): Promise<AiLetterDetail> {
+    const letter = await this.jobsStore.getLetter(jobId, userId);
+    if (!letter) {
+      throw new NotFoundException('Saved letter not found');
+    }
+    return letter;
+  }
+
+  private toJobStatusResponse(snapshot: AiJobSnapshot): JobStatusResponse {
+    const completed = snapshot.status === 'completed';
+    const failed = snapshot.status === 'failed';
+
     return {
-      jobId: job.id,
-      status: job.status,
-      message: job.message,
-      credits: job.credits,
-      updatedAt: job.updatedAt,
-      content: job.status === 'completed' ? job.content ?? undefined : undefined,
-      error: job.status === 'failed' ? job.error ?? 'Deep research failed.' : undefined,
+      jobId: snapshot.jobId,
+      status: snapshot.status,
+      message: snapshot.message,
+      credits: snapshot.credits,
+      updatedAt: snapshot.updatedAt,
+      createdAt: snapshot.createdAt,
+      completedAt: snapshot.completedAt ?? null,
+      content: completed && typeof snapshot.content === 'string' ? snapshot.content : undefined,
+      error: failed ? snapshot.error ?? 'Deep research failed.' : undefined,
+      prompt: snapshot.prompt,
+      tone: snapshot.tone,
+      details: snapshot.details ?? [],
+      mpName: snapshot.mpName,
+      constituency: snapshot.constituency,
+      userName: snapshot.userName,
+      userAddressLine: snapshot.userAddressLine,
     };
   }
 
   private async executeJob(job: JobRecord, input: GeneratePayload) {
     try {
       const content = await this.performDeepResearch(job, input);
-      this.updateJob(job, {
+      await this.updateJob(job, {
         status: 'completed',
         message: 'Deep research completed. Draft ready.',
         content,
+        completedAt: Date.now(),
       });
       this.scheduleCleanup(job.id, JOB_CLEANUP_MS);
     } catch (error: any) {
@@ -193,11 +283,12 @@ export class AiService {
         this.logger.error(`Failed to refund credits for job ${job.id}`, refundError?.message ?? refundError);
         return null;
       });
-      this.updateJob(job, {
+      await this.updateJob(job, {
         status: 'failed',
         message,
         error: message,
         credits: refund?.credits ?? job.credits,
+        completedAt: Date.now(),
       });
       this.scheduleCleanup(job.id, FAILED_JOB_CLEANUP_MS);
     }
@@ -212,10 +303,47 @@ export class AiService {
     }, delay).unref?.();
   }
 
-  private updateJob(job: JobRecord, patch: Partial<JobRecord>) {
-    if (!this.jobs.has(job.id)) return;
+  private async updateJob(
+    job: JobRecord,
+    patch: Partial<JobRecord> & {
+      status?: JobStatus;
+      message?: string;
+      content?: string | null;
+      error?: string | null;
+      credits?: number;
+      lastResponseId?: string | null;
+      completedAt?: number | null;
+    },
+  ) {
     Object.assign(job, patch);
     job.updatedAt = Date.now();
+    if (patch.status) job.status = patch.status;
+    if (patch.completedAt !== undefined) job.completedAt = patch.completedAt;
+
+    const cached = this.jobs.get(job.id);
+    if (cached && cached !== job) {
+      Object.assign(cached, job);
+      cached.updatedAt = job.updatedAt;
+    } else if (!cached) {
+      this.jobs.set(job.id, job);
+    }
+
+    try {
+      await this.jobsStore.update(job.id, {
+        status: patch.status,
+        message: patch.message,
+        content: patch.content === undefined ? undefined : patch.content,
+        error: patch.error === undefined ? undefined : patch.error,
+        credits: patch.credits,
+        lastResponseId: patch.lastResponseId === undefined ? undefined : patch.lastResponseId,
+        completedAt: patch.completedAt === undefined ? undefined : patch.completedAt,
+      });
+    } catch (error: any) {
+      this.logger.error(
+        `Failed to persist deep research job ${job.id} update`,
+        error?.stack ?? error?.message ?? error,
+      );
+    }
   }
 
   private async performDeepResearch(
@@ -260,7 +388,7 @@ export class AiService {
 
     const researchExpectations = `Research objectives:\n1. Understand the constituent's issue and the outcomes they want.\n2. Identify relevant UK policies, legislation, votes, or programmes the MP can influence.\n3. Gather recent statistics, official statements, or expert findings that strengthen the case.\n4. Surface any timelines, upcoming debates, or consultations the MP should note.`;
 
-    const outputExpectations = `Output requirements:\n- Compose the complete letter within 500 words.\n- Keep the tone ${tone ? tone.toLowerCase() : 'respectful and persuasive'}.\n- Weave evidence-backed arguments that align with the constituent's goals.\n- Present a bulleted list of specific actions for the MP.\n- Return valid HTML only, with semantic tags and no surrounding <html> or <body>.\n- Structure:\n  <div class=\"letter\">\n    <p>Sender address</p>\n    <p>MP greeting</p>\n    <p>Letter body with inline citation numbers like [1]</p>\n    <ul>Bullet actions for the MP</ul>\n    <p>Closing and signature</p>\n    <h3>References</h3>\n    <ol>\n      <li><a href=\"URL\" rel=\"noopener noreferrer\">Title — Source (Year)</a></li>\n    </ol>\n  </div>`;
+    const outputExpectations = `Output requirements:\n- Compose the complete letter within 500 words.\n- Keep the tone ${tone ? tone.toLowerCase() : 'respectful and persuasive'}.\n- Weave evidence-backed arguments that align with the constituent's goals.\n- Present a bulleted list of specific actions for the MP.\n- Return valid HTML only, with semantic tags and no surrounding <html> or <body>.\n- Structure:\n  <div class="letter">\n    <p>Sender address</p>\n    <p>MP greeting</p>\n    <p>Letter body with inline citation numbers like [1]</p>\n    <ul>Bullet actions for the MP</ul>\n    <p>Closing and signature</p>\n    <h3>References</h3>\n    <ol>\n      <li><a href="URL" rel="noopener noreferrer">Title — Source (Year)</a></li>\n    </ol>\n  </div>`;
 
     const userPrompt = `${audienceLine}\n${senderLine}\n${toneInstruction}\n\n${researchExpectations}\n\nIssue summary from the constituent:\n${input.prompt.trim()}\n\n${supportingDetailBlock}\n\n${outputExpectations}\n\nUsing the guidance above, research thoroughly and draft the full letter with inline citations and the required reference list.`;
 
@@ -320,13 +448,14 @@ export class AiService {
       responseParams.temperature = 0.6;
     }
 
-    this.updateJob(job, {
+    await this.updateJob(job, {
       message: 'Submitting deep research request…',
     });
 
     const initial = await client.responses.create(responseParams);
     job.lastResponseId = initial.id;
-    this.updateJob(job, {
+    await this.updateJob(job, {
+      lastResponseId: initial.id,
       message: 'Deep research initiated. Gathering sources…',
     });
 
@@ -342,7 +471,7 @@ export class AiService {
         if (!extendedOnce) {
           extendedOnce = true;
           timeBudgetMs += extensionMs;
-          this.updateJob(job, {
+          await this.updateJob(job, {
             message: 'Still researching… taking longer than usual. Extending time limit.',
           });
           continue;
@@ -351,7 +480,7 @@ export class AiService {
       }
       await sleep(pollIntervalMs);
       latest = await client.responses.retrieve(responseId);
-      this.updateJob(job, {
+      await this.updateJob(job, {
         message: `Deep research in progress (status: ${latest.status}).`,
       });
     }
