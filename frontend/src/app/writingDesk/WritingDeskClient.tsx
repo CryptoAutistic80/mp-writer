@@ -258,7 +258,8 @@ export default function WritingDeskClient() {
     }
 
     if (typeof data.credits === 'number') {
-      setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
+      const credits = data.credits;
+      setContext((prev) => (prev ? { ...prev, credits } : prev));
     }
 
     if (typeof data.message === 'string') {
