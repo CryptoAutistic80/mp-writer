@@ -495,7 +495,7 @@ export default function WritingDeskClient() {
         recordReference(href);
       }
       const textContent = anchor.textContent || '';
-      if (/^\s*\[\s*\d+\s*\]\s*$/.test(textContent)) {
+      if (/^\s*(?:\[\s*\d+\s*\]|【\s*\d+\s*】)\s*$/.test(textContent)) {
         anchor.remove();
         return;
       }
@@ -503,7 +503,7 @@ export default function WritingDeskClient() {
     });
 
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const citationNumber = /(?:\s|\u00A0)*\[\s*\d+\s*\](?:[,.;:])?/g;
+    const citationNumber = /(?:\s|\u00A0)*(?:\[\s*\d+\s*\]|【\s*\d+\s*】|\(\s*\d+\s*\))(?:[,.;:])?/g;
     const markdownLink = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi;
     const parenWithUrl = new RegExp(
       String.raw`\(\s*(?:\[)?(https?:\/\/[^\s)\]]+)(?:\])?(?:\s*\[[0-9]+\])?\s*\)`,
