@@ -306,7 +306,7 @@ export default function WritingDeskClient() {
       clearJobPolling();
       if (typeof data.content === 'string') {
         const html = normaliseLetterHtml(data.content);
-        setLetter(enhanceCitations(html));
+        setLetter(stripCitationsAndReferences(html));
       }
       setIsGenerating(false);
       setActiveJobId(null);
@@ -516,160 +516,102 @@ export default function WritingDeskClient() {
     return container.innerHTML;
   }
 
-  function enhanceCitations(html: string): string {
-    const findReferencesList = (
-      container: HTMLElement,
-    ): HTMLOListElement | HTMLUListElement | null => {
-      const heading = Array.from(container.querySelectorAll('h1,h2,h3,h4,h5,h6')).find((candidate) =>
-        /^references\b/i.test((candidate.textContent || '').trim()),
-      );
-      if (!heading) {
-        return null;
-      }
-
-      const sibling = heading.nextElementSibling;
-      if (sibling && /^(ol|ul)$/i.test(sibling.tagName)) {
-        return sibling as HTMLOListElement | HTMLUListElement;
-      }
-
-      const parentList = heading.parentElement?.querySelector('ol,ul');
-      if (parentList) {
-        return parentList as HTMLOListElement | HTMLUListElement;
-      }
-
-      return null;
-    };
-
+  function stripCitationsAndReferences(html: string): string {
     const root = document.createElement('div');
     root.innerHTML = html;
 
-    const refsList = findReferencesList(root);
-    const urlToIndex = new Map<string, number>();
-    const normalise = (u: string) => {
-      try {
-        const url = new URL(u);
-        return `${url.protocol}//${url.host}${url.pathname}`;
-      } catch {
-        return u.trim();
+    const citationInline = /(?:\s|\u00A0)*(?:\[\s*\d+\s*\]|【\s*\d+\s*】|\(\s*\d+\s*\)|\^\s*\d+)(?:[,.;:]|\s)?/g;
+
+    const isCitationOnly = (node: Element, text: string): boolean => {
+      if (/^\s*(?:\[\s*\d+\s*\]|【\s*\d+\s*】|\(\s*\d+\s*\)|\^\s*\d+)\s*[,.;:]?\s*$/.test(text)) {
+        return true;
       }
+
+      if ((node.tagName === 'SUP' || node.tagName === 'SUB') && /^\s*\d+\s*$/.test(text)) {
+        return true;
+      }
+
+      return false;
     };
 
-    const items = refsList ? Array.from(refsList.querySelectorAll('li')) : [];
-    items.forEach((li, i) => {
-      const anchor = li.querySelector<HTMLAnchorElement>('a[href]');
-      if (!anchor || !anchor.href) {
-        return;
-      }
-      const idx = i + 1;
-      const norm = normalise(anchor.href);
-      if (!urlToIndex.has(norm)) {
-        urlToIndex.set(norm, idx);
-      }
-      li.id = `ref-${idx}`;
-    });
-    let nextIndex = items.length + 1;
-
-    const appendReference = refsList
-      ? (href: string): number | null => {
-          const trimmed = href.trim();
-          if (!trimmed || trimmed.startsWith('#')) {
-            return null;
-          }
-          const norm = normalise(trimmed);
-          const existing = urlToIndex.get(norm);
-          if (existing) {
-            return existing;
-          }
-          const li = document.createElement('li');
-          const anchor = document.createElement('a');
-          anchor.href = trimmed;
-          anchor.target = '_blank';
-          anchor.rel = 'noopener noreferrer';
-          try {
-            const parsed = new URL(trimmed);
-            anchor.textContent = `${parsed.hostname.replace(/^www\./, '')} — ${parsed.pathname.replace(/\/$/, '')}`;
-          } catch {
-            anchor.textContent = trimmed;
-          }
-          li.appendChild(anchor);
-          refsList.appendChild(li);
-          const assigned = nextIndex++;
-          li.id = `ref-${assigned}`;
-          urlToIndex.set(norm, assigned);
-          return assigned;
+    const removeReferenceSections = () => {
+      const headings = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+      headings.forEach((heading) => {
+        const text = (heading.textContent || '').trim();
+        if (!/^(?:references?|sources?)\b/i.test(text)) {
+          return;
         }
-      : () => null;
 
-    const recordReference = (href: string | null | undefined) => {
-      if (!href) {
-        return;
-      }
-      appendReference(href);
+        let sibling = heading.nextElementSibling;
+        while (sibling && /^(p|ol|ul)$/i.test(sibling.tagName)) {
+          const next = sibling.nextElementSibling;
+          sibling.remove();
+          sibling = next;
+        }
+        heading.remove();
+      });
     };
 
-    const anchors = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]'));
-    anchors.forEach((anchor) => {
-      if (refsList && refsList.contains(anchor)) {
-        return;
-      }
-      const href = anchor.getAttribute('href') || anchor.href || '';
-      if (href && !href.startsWith('#')) {
-        recordReference(href);
-      }
-      const textContent = anchor.textContent || '';
-      if (/^\s*(?:\[\s*\d+\s*\]|【\s*\d+\s*】)\s*$/.test(textContent)) {
-        anchor.remove();
-        return;
-      }
-      anchor.replaceWith(document.createTextNode(textContent));
-    });
+    const removeCitationNodes = () => {
+      const inlineNodes = Array.from(root.querySelectorAll('sup,sub,span,em,strong,b,i,a'));
+      inlineNodes.forEach((node) => {
+        const text = node.textContent || '';
+        if (isCitationOnly(node, text)) {
+          node.remove();
+          return;
+        }
 
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const citationNumber = /(?:\s|\u00A0)*(?:\[\s*\d+\s*\]|【\s*\d+\s*】|\(\s*\d+\s*\))(?:[,.;:])?/g;
-    const markdownLink = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi;
-    const parenWithUrl = new RegExp(
-      String.raw`\(\s*(?:\[)?(https?:\/\/[^\s)\]]+)(?:\])?(?:\s*\[[0-9]+\])?\s*\)`,
-      'gi',
-    );
-    let current: Node | null = walker.nextNode();
-    while (current) {
-      const parentEl = current.parentElement;
-      if (parentEl && refsList && refsList.contains(parentEl)) {
-        current = walker.nextNode();
-        continue;
-      }
+        const cleaned = text.replace(citationInline, ' ').replace(/\s{2,}/g, ' ').trim();
+        if (!cleaned) {
+          node.remove();
+          return;
+        }
 
-      let text = current.textContent || '';
-      if (!text.trim()) {
-        current = walker.nextNode();
-        continue;
-      }
-
-      text = text.replace(markdownLink, (_match, linkText, url) => {
-        recordReference(url);
-        return linkText;
+        if (cleaned !== text) {
+          node.textContent = cleaned;
+        }
       });
+    };
 
-      text = text.replace(parenWithUrl, (_match, url: string) => {
-        recordReference(url);
-        return '';
-      });
+    const stripTextNodes = () => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let current: Node | null = walker.nextNode();
+      while (current) {
+        const parent = current.parentElement;
+        if (parent && /^(script|style|code|pre)$/i.test(parent.tagName)) {
+          current = walker.nextNode();
+          continue;
+        }
 
-      text = text.replace(/\[(?:https?:\/\/|www\.)[^\]]+\]/gi, '');
-      text = text.replace(citationNumber, '');
-      text = text.replace(/\s{2,}/g, ' ');
-      text = text.replace(/\(\s*\)/g, '');
-      if (text !== current.textContent) {
-        current.textContent = text;
+        const original = current.textContent || '';
+        const replaced = original.replace(citationInline, ' ').replace(/\s{2,}/g, ' ');
+        if (replaced !== original) {
+          current.textContent = replaced;
+        }
+
+        current = walker.nextNode();
       }
+    };
 
-      current = walker.nextNode();
-    }
+    const removeEmptyNodes = () => {
+      const maybeEmpty = Array.from(root.querySelectorAll('p,li,span,div'));
+      maybeEmpty.forEach((el) => {
+        if (!(el.textContent || '').trim() && el.children.length === 0) {
+          el.remove();
+        }
+      });
+    };
+
+    removeReferenceSections();
+    removeCitationNodes();
+    stripTextNodes();
+    removeEmptyNodes();
 
     let output = root.innerHTML;
     output = output.replace(/\s{2,}/g, ' ');
     output = output.replace(/\(\s*\)/g, '');
-    return output;
+    output = output.replace(/\s+([,.;:])/g, '$1');
+    return output.trim();
   }
 
   async function handleGenerate() {
