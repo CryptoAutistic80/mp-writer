@@ -8,6 +8,7 @@ import { UserMpModule } from '../user-mp/user-mp.module';
 import { UserAddressModule } from '../user-address-store/user-address.module';
 import { AiJob, AiJobSchema } from './schemas/ai-job.schema';
 import { AiJobStoreService } from './ai-job-store.service';
+import { EncryptionService } from '../crypto/encryption.service';
 
 @Module({
   imports: [
@@ -18,7 +19,7 @@ import { AiJobStoreService } from './ai-job-store.service';
     MongooseModule.forFeature([{ name: AiJob.name, schema: AiJobSchema }]),
   ],
   controllers: [AiController],
-  providers: [AiService, AiJobStoreService],
+  providers: [AiService, AiJobStoreService, EncryptionService],
 })
 export class AiModule {}
 

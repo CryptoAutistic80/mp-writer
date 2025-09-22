@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { AiJob, AiJobDocument, AiJobStatus } from './schemas/ai-job.schema';
 import { FollowUpDetailDto } from './dto/generate.dto';
+import { EncryptionService } from '../crypto/encryption.service';
 
 export interface AiJobSnapshot {
   jobId: string;
@@ -66,8 +67,11 @@ export interface AiLetterDetail extends AiLetterSummary {
 
 @Injectable()
 export class AiJobStoreService {
+  private readonly logger = new Logger(AiJobStoreService.name);
+
   constructor(
     @InjectModel(AiJob.name) private readonly model: Model<AiJobDocument>,
+    private readonly enc: EncryptionService,
   ) {}
 
   async create(options: CreateAiJobOptions): Promise<AiJobSnapshot> {
@@ -92,19 +96,33 @@ export class AiJobStoreService {
   }
 
   async update(jobId: string, patch: UpdateAiJobOptions): Promise<void> {
-    const update: Record<string, any> = {};
-    if (patch.status) update.status = patch.status;
-    if (patch.message !== undefined) update.message = patch.message;
-    if (patch.content !== undefined) update.content = patch.content;
-    if (patch.error !== undefined) update.error = patch.error;
-    if (patch.credits !== undefined) update.credits = patch.credits;
-    if (patch.lastResponseId !== undefined) update.lastResponseId = patch.lastResponseId;
+    const setUpdate: Record<string, any> = {};
+    const unsetUpdate: Record<string, any> = {};
+
+    if (patch.status) setUpdate.status = patch.status;
+    if (patch.message !== undefined) setUpdate.message = patch.message;
+    if (patch.error !== undefined) setUpdate.error = patch.error;
+    if (patch.credits !== undefined) setUpdate.credits = patch.credits;
+    if (patch.lastResponseId !== undefined) setUpdate.lastResponseId = patch.lastResponseId;
     if (patch.completedAt !== undefined)
-      update.completedAt = patch.completedAt ? new Date(patch.completedAt) : null;
+      setUpdate.completedAt = patch.completedAt ? new Date(patch.completedAt) : null;
 
-    if (Object.keys(update).length === 0) return;
+    if (patch.content !== undefined) {
+      if (patch.content === null) {
+        setUpdate.contentCiphertext = null;
+      } else {
+        setUpdate.contentCiphertext = this.enc.encryptObject({ content: patch.content });
+      }
+      unsetUpdate.content = '';
+    }
 
-    await this.model.updateOne({ jobId }, { $set: update }).exec();
+    const updateOps: Record<string, any> = {};
+    if (Object.keys(setUpdate).length > 0) updateOps.$set = setUpdate;
+    if (Object.keys(unsetUpdate).length > 0) updateOps.$unset = unsetUpdate;
+
+    if (Object.keys(updateOps).length === 0) return;
+
+    await this.model.updateOne({ jobId }, updateOps).exec();
   }
 
   async findForUser(jobId: string, userId: string): Promise<AiJobSnapshot | null> {
@@ -124,7 +142,14 @@ export class AiJobStoreService {
 
   async listLetters(userId: string, limit = 20): Promise<AiLetterSummary[]> {
     const docs = await this.model
-      .find({ user: userId, status: 'completed', content: { $exists: true, $ne: null } })
+      .find({
+        user: userId,
+        status: 'completed',
+        $or: [
+          { contentCiphertext: { $exists: true, $ne: null } },
+          { content: { $exists: true, $ne: null } },
+        ],
+      })
       .sort({ updatedAt: -1 })
       .limit(limit)
       .select({
@@ -150,9 +175,19 @@ export class AiJobStoreService {
 
   async getLetter(jobId: string, userId: string): Promise<AiLetterDetail | null> {
     const doc = await this.model
-      .findOne({ jobId, user: userId, status: 'completed', content: { $exists: true, $ne: null } })
+      .findOne({
+        jobId,
+        user: userId,
+        status: 'completed',
+        $or: [
+          { contentCiphertext: { $exists: true, $ne: null } },
+          { content: { $exists: true, $ne: null } },
+        ],
+      })
       .lean();
-    if (!doc || !doc.content) return null;
+    if (!doc) return null;
+    const content = this.decryptContent(doc);
+    if (content === null) return null;
     return {
       jobId: doc.jobId,
       prompt: doc.prompt,
@@ -161,11 +196,12 @@ export class AiJobStoreService {
       tone: doc.tone,
       createdAt: this.toMillis(doc.createdAt),
       updatedAt: this.toMillis(doc.updatedAt),
-      content: doc.content,
+      content,
     };
   }
 
   private toSnapshot(doc: AiJob | AiJobDocument | (AiJob & { _id: any }) | any): AiJobSnapshot {
+    const content = this.decryptContent(doc);
     return {
       jobId: doc.jobId,
       userId: doc.user?.toString?.() ?? doc.user,
@@ -180,7 +216,7 @@ export class AiJobStoreService {
       constituency: doc.constituency,
       userName: doc.userName,
       userAddressLine: doc.userAddressLine,
-      content: doc.content,
+      content,
       error: doc.error,
       credits: doc.credits,
       lastResponseId: doc.lastResponseId,
@@ -188,6 +224,28 @@ export class AiJobStoreService {
       updatedAt: this.toMillis(doc.updatedAt),
       completedAt: doc.completedAt ? this.toMillis(doc.completedAt) : null,
     };
+  }
+
+  private decryptContent(doc: any): string | null {
+    const ciphertext = doc.contentCiphertext;
+    if (typeof ciphertext === 'string' && ciphertext.length > 0) {
+      try {
+        const payload = this.enc.decryptObject<{ content?: string }>(ciphertext);
+        if (payload && typeof payload.content === 'string') {
+          return payload.content;
+        }
+        return null;
+      } catch (error) {
+        this.logger.warn(`Failed to decrypt AI letter content for job ${doc.jobId}: ${error}`);
+        return null;
+      }
+    }
+
+    if (typeof doc.content === 'string' && doc.content.length > 0) {
+      return doc.content;
+    }
+
+    return null;
   }
 
   private toMillis(value: Date | string | number | undefined): number {

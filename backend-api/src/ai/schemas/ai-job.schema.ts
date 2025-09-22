@@ -53,6 +53,9 @@ export class AiJob {
   content?: string | null;
 
   @Prop()
+  contentCiphertext?: string | null;
+
+  @Prop()
   error?: string | null;
 
   @Prop()
