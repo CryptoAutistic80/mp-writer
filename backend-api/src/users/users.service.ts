@@ -35,15 +35,29 @@ export class UsersService {
       if (user) return user;
     }
 
-    // Fall back to email if available
-    let user = input.email ? await this.userModel.findOne({ email: input.email }) : null;
-    if (!user) {
-      user = await this.userModel.create({
-        email: input.email ?? `${input.provider}:${input.providerId}@example.invalid`,
-        name: input.name,
-        image: input.image,
-      });
-    }
+    // Atomic user creation/lookup to prevent race condition during concurrent OAuth logins
+    // This fixes avatar fallback issues caused by duplicate user records
+    const userEmail = input.email ?? `${input.provider}:${input.providerId}@example.invalid`;
+    const user = await this.userModel.findOneAndUpdate(
+      { email: userEmail },
+      {
+        $setOnInsert: {
+          email: userEmail,
+          name: input.name,
+          image: input.image,
+        },
+        // Always update name and image in case they changed from OAuth provider
+        $set: {
+          name: input.name,
+          image: input.image,
+        }
+      },
+      {
+        upsert: true,
+        new: true, // Return document after update
+        lean: true
+      }
+    );
 
     // Ensure account mapping exists
     await this.accountModel.updateOne(
@@ -52,9 +66,7 @@ export class UsersService {
       { upsert: true }
     );
 
-    // Return lean
-    const lean = await this.userModel.findById((user as any)._id).lean();
-    return lean;
+    return user;
   }
 }
 
