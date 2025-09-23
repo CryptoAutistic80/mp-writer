@@ -121,7 +121,7 @@ interface GenerateFollowupsRequestInternal {
 
 interface TransformLetterRequestInternal {
   userId: string;
-  letterHtml: string;
+  letterContent: string;
   mpName: string;
   constituency?: string;
   senderName: string;
@@ -229,8 +229,8 @@ export class AiService {
   }
 
   async transformLetterToJson(request: TransformLetterRequestInternal): Promise<{ letter: StructuredLetter }> {
-    const letterHtml = (request.letterHtml || '').trim();
-    if (!letterHtml) {
+    const letterContent = (request.letterContent || '').trim();
+    if (!letterContent) {
       throw new Error('Letter content is required for transformation.');
     }
 
@@ -240,6 +240,11 @@ export class AiService {
 
     const apiKey = this.config.get<string>('OPENAI_API_KEY');
     if (!apiKey) {
+      const fallbackBody = letterContent
+        .split(/\n{2,}/)
+        .map((paragraph) => paragraph.trim())
+        .filter((paragraph) => paragraph.length > 0);
+
       const fallback = structuredLetterSchema.parse({
         recipient: {
           name: request.mpName,
@@ -253,7 +258,7 @@ export class AiService {
         date: targetDate,
         tone: tone || undefined,
         salutation: `Dear ${request.mpName},`,
-        body: [this.stripHtml(letterHtml) || 'Letter content unavailable in development mode.'],
+        body: fallbackBody.length ? fallbackBody : ['Letter content unavailable in development mode.'],
         actions: [],
         conclusion: 'Thank you for your time and attention to this matter.',
         closing: {
@@ -267,10 +272,10 @@ export class AiService {
 
     const systemPrompt = [
       'You are MP Writer, an assistant that converts fact-checked constituency letters into structured JSON.',
-      'Read the HTML letter and extract each section into the schema provided. Remove inline citation markers such as [1] from the',
-      'body text but keep the underlying sentences intact.',
-      'Summarise the MP\'s action list as bullet points, extract a concise conclusion, and capture up to three references from the',
-      'reference section. Return strictly valid JSON without code fences or commentary.',
+      'Read the plain-text letter, identify each logical section, and populate the schema provided.',
+      'Remove inline citation markers such as [1] from the body text but keep the supporting sentences intact.',
+      'Capture at most three references using the information in the References section, preserving the original URLs.',
+      'Return strictly valid JSON without code fences or commentary.',
     ].join(' ');
 
     const addressBlock = senderAddressLines.length
@@ -278,13 +283,13 @@ export class AiService {
       : '- Address not supplied; leave placeholder in JSON.';
 
     const userPrompt = [
-      `Letter HTML:\n${letterHtml}`,
+      `Plain-text letter:\n${letterContent}`,
       `Recipient: ${request.mpName}${request.constituency ? ` (${request.constituency})` : ''}`,
       `Sender name: ${request.senderName}`,
       `Sender address lines:\n${addressBlock}`,
       `Preferred tone: ${tone || 'not specified'}`,
       `Use this letter date: ${targetDate}`,
-      'Output a JSON object that matches the schema exactly.',
+      'Review the letter, interpret any action or reference sections, and output JSON matching the schema exactly.',
     ].join('\n\n');
 
     try {
@@ -506,11 +511,11 @@ export class AiService {
       ? `Additional background details provided by the user:\n${detailLines}`
       : 'No additional background details were provided beyond the issue summary.';
 
-    const systemInstructions = `You are MP Writer, an assistant who performs multi-step deep research to draft fact-checked constituency letters for UK residents.\nOperating Principles:\n- Run thorough research before writing. Prioritise recent information (ideally within the last 3 years) from official UK government, Parliament, reputable NGOs, or mainstream journalism with transparent sourcing.\n- Never invent facts. If information cannot be found, state the limitation briefly rather than speculating.\n- When citing statistics or statements, capture the publication date or most recent datapoint in the reference list.\n- Provide inline citations using numbered markers like [1], [2] that map to a reference section.\n- References must include: title, source/organisation, year (if available), and a direct URL the constituent can share.\n- Keep the final letter under 500 words, written in clear UK English, respectful yet persuasive.\n- Include a short bulleted action list inside the letter outlining concrete requests for the MP.\n- Output format MUST be HTML (no Markdown, no code fences).`;
+    const systemInstructions = `You are MP Writer, an assistant who performs multi-step deep research to draft fact-checked constituency letters for UK residents.\nOperating Principles:\n- Run thorough research before writing. Prioritise recent information (ideally within the last 3 years) from official UK government, Parliament, reputable NGOs, or mainstream journalism with transparent sourcing.\n- Never invent facts. If information cannot be found, state the limitation briefly rather than speculating.\n- When citing statistics or statements, capture the publication date or most recent datapoint in the reference list.\n- Provide inline citations using numbered markers like [1], [2] that map to a reference section.\n- References must include: title, source/organisation, year (if available), and a direct URL the constituent can share.\n- Keep the final letter under 500 words, written in clear UK English, respectful yet persuasive.\n- Include a short action list within the letter outlining concrete requests for the MP.\n- Return plain text only (no HTML, Markdown, or code fences).`;
 
     const researchExpectations = `Research objectives:\n1. Understand the constituent's issue and the outcomes they want.\n2. Identify relevant UK policies, legislation, votes, or programmes the MP can influence.\n3. Gather recent statistics, official statements, or expert findings that strengthen the case.\n4. Surface any timelines, upcoming debates, or consultations the MP should note.`;
 
-    const outputExpectations = `Output requirements:\n- Compose the complete letter within 500 words.\n- Keep the tone ${tone ? tone.toLowerCase() : 'respectful and persuasive'}.\n- Weave evidence-backed arguments that align with the constituent's goals.\n- Present a bulleted list of specific actions for the MP.\n- Return valid HTML only, with semantic tags and no surrounding <html> or <body>.\n- Structure:\n  <div class="letter">\n    <p>Sender address</p>\n    <p>MP greeting</p>\n    <p>Letter body with inline citation numbers like [1]</p>\n    <ul>Bullet actions for the MP</ul>\n    <p>Closing and signature</p>\n    <h3>References</h3>\n    <ol>\n      <li><a href="URL" rel="noopener noreferrer">Title — Source (Year)</a></li>\n    </ol>\n  </div>`;
+    const outputExpectations = `Output requirements:\n- Compose the complete letter within 500 words.\n- Keep the tone ${tone ? tone.toLowerCase() : 'respectful and persuasive'}.\n- Weave evidence-backed arguments that align with the constituent's goals.\n- Present an "Actions:" section with bullet points introduced using "-" before the closing paragraph.\n- End with a "References:" section listing each source on its own line using the format "1. Title — Source (Year). URL".\n- Do not include HTML tags or inline hyperlinks; keep everything as plain text.`;
 
     const userPrompt = `${audienceLine}\n${senderLine}\n${toneInstruction}\n\n${researchExpectations}\n\nIssue summary from the constituent:\n${input.prompt.trim()}\n\n${supportingDetailBlock}\n\n${outputExpectations}\n\nUsing the guidance above, research thoroughly and draft the full letter with inline citations and the required reference list.`;
 
@@ -670,10 +675,6 @@ export class AiService {
       .map((line) => (line || '').trim())
       .filter((line) => Boolean(line))
       .slice(0, 5);
-  }
-
-  private stripHtml(value: string): string {
-    return value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
   private slugify(value: string): string {

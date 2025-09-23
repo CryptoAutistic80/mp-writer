@@ -83,7 +83,7 @@ export type StructuredLetter = z.infer<typeof structuredLetterSchema>;
 
 export const transformLetterRequestSchema = z
   .object({
-    letterHtml: z.string().min(1, 'letterHtml is required'),
+    letterContent: z.string().min(1, 'letterContent is required'),
     mpName: z.string().min(1, 'mpName is required'),
     constituency: z.string().optional(),
     senderName: z.string().min(1, 'senderName is required'),

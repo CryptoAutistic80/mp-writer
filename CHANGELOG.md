@@ -11,6 +11,10 @@
 - Extended the writing desk workflow to orchestrate follow-up collection, deep research polling, transformation requests, and structured letter rendering.
 - Added provider wiring updates required for React Query usage in the frontend app shell.
 
+### Changed
+- Updated deep-research prompts to return plain text letters, deferring formatting and link handling to the transformation step.
+- Reworked the writing desk UI and copy behaviour to operate on plain text letters while keeping structured JSON output intact.
+
 ### Notes
 - Transformation endpoint currently returns parsed JSON and surfaces validation errors for retry handling.
 - Credit consumption for transformation calls remains configurable pending product decision.

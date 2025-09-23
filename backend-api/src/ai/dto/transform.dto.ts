@@ -3,7 +3,7 @@ import { ArrayMaxSize, IsArray, IsNotEmpty, IsOptional, IsString, MaxLength } fr
 export class TransformDto {
   @IsString()
   @IsNotEmpty()
-  letterHtml!: string;
+  letterContent!: string;
 
   @IsString()
   @IsNotEmpty()

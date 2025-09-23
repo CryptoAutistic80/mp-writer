@@ -54,7 +54,7 @@ export class AiController {
   async transform(@Req() req: any, @Body() body: TransformDto) {
     return this.ai.transformLetterToJson({
       userId: req.user.id,
-      letterHtml: body.letterHtml,
+      letterContent: body.letterContent,
       mpName: body.mpName,
       constituency: body.constituency,
       senderName: body.senderName,

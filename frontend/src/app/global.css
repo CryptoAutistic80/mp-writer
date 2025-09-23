@@ -1541,8 +1541,8 @@ body {
   overflow-x: auto;
 }
 
-.letter-output .letter-html {
-  white-space: normal;
+.letter-output .letter-text {
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
