@@ -5,7 +5,15 @@ import type {
   ResponseCreateParamsNonStreaming,
   ResponseStatus,
 } from 'openai/resources/responses/responses';
+import {
+  generateFollowupsResponseSchema,
+  structuredLetterJsonSchema,
+  structuredLetterSchema,
+  type GenerateFollowupsResponse,
+  type StructuredLetter,
+} from '@mp-writer/api-types';
 import { FollowUpDetailDto } from './dto/generate.dto';
+import { FollowUpContextDto } from './dto/followups.dto';
 import { UserCreditsService } from '../user-credits/user-credits.service';
 import { UserMpService } from '../user-mp/user-mp.service';
 import { UserAddressService } from '../user-address-store/user-address.service';
@@ -17,6 +25,33 @@ const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_TIMEOUT_MS = 900000; // 15 minutes
 const JOB_CLEANUP_MS = 10 * 60 * 1000;
 const FAILED_JOB_CLEANUP_MS = 5 * 60 * 1000;
+const DEFAULT_FOLLOWUP_MODEL = 'gpt-5.1-mini';
+const DEFAULT_TRANSFORM_MODEL = 'gpt-5.1';
+
+const FOLLOWUP_RESPONSE_SCHEMA = {
+  name: 'follow_up_questions',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['followUps'],
+    properties: {
+      followUps: {
+        type: 'array',
+        maxItems: 4,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['id', 'question'],
+          properties: {
+            id: { type: 'string', minLength: 1 },
+            question: { type: 'string', minLength: 1 },
+          },
+        },
+      },
+    },
+  },
+} as const;
 
 type JobStatus = 'queued' | 'in_progress' | 'completed' | 'failed';
 
@@ -76,6 +111,25 @@ interface JobStatusResponse {
   error?: string;
 }
 
+interface GenerateFollowupsRequestInternal {
+  userId: string;
+  issueSummary: string;
+  contextAnswers: FollowUpContextDto[];
+  mpName?: string;
+  constituency?: string;
+}
+
+interface TransformLetterRequestInternal {
+  userId: string;
+  letterHtml: string;
+  mpName: string;
+  constituency?: string;
+  senderName: string;
+  senderAddressLines: string[];
+  tone?: string;
+  date?: string;
+}
+
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
@@ -87,6 +141,202 @@ export class AiService {
     private readonly userMp: UserMpService,
     private readonly userAddress: UserAddressService,
   ) {}
+
+  async generateFollowups(request: GenerateFollowupsRequestInternal): Promise<GenerateFollowupsResponse> {
+    const issueSummary = (request.issueSummary || '').trim();
+    if (!issueSummary) {
+      return { followUps: [] };
+    }
+
+    const apiKey = this.config.get<string>('OPENAI_API_KEY');
+    if (!apiKey) {
+      this.logger.warn('OPENAI_API_KEY missing; follow-up generation disabled.');
+      return { followUps: [] };
+    }
+
+    const contextBlock = (request.contextAnswers || [])
+      .filter((item) => item && item.prompt && item.answer)
+      .map((item, index) => {
+        const prompt = item.prompt.trim();
+        const answer = item.answer.trim();
+        return `Q${index + 1}: ${prompt}\nAnswer: ${answer}`;
+      })
+      .join('\n\n');
+
+    const mpDescriptor = request.mpName
+      ? `${request.mpName}${request.constituency ? `, MP for ${request.constituency}` : ''}`
+      : 'the constituent\'s MP';
+
+    const systemPrompt =
+      'You are MP Writer, an assistant that drafts clarifying follow-up questions before writing a constituency letter. ' +
+      'Review the provided issue summary and background answers. Suggest up to four targeted follow-up questions that will ' +
+      'help gather essential missing information. If no follow-up is required, return an empty list. Questions must be ' +
+      'concise, avoid duplication, and stay within the constituent\'s scope. Respond only with JSON.';
+
+    const userPrompt = [
+      `Issue summary:\n${issueSummary}`,
+      contextBlock ? `Background answers:\n${contextBlock}` : 'Background answers: None provided.',
+      `Recipient: ${mpDescriptor}.`,
+      'Return an object shaped as { "followUps": [{ "id": "unique-id", "question": "text" }] } with at most four items.',
+      'Use short, lowercase ids separated by hyphens (e.g. "evidence-needed").',
+    ].join('\n\n');
+
+    try {
+      const { default: OpenAI } = await import('openai');
+      const client = new OpenAI({ apiKey, timeout: 30000 });
+      const configuredModel = this.config.get<string>('OPENAI_FOLLOWUP_MODEL')?.trim();
+      const model = configuredModel && configuredModel.length > 0 ? configuredModel : DEFAULT_FOLLOWUP_MODEL;
+
+      const response = await client.responses.create({
+        model,
+        input: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        response_format: { type: 'json_schema', json_schema: FOLLOWUP_RESPONSE_SCHEMA },
+        max_output_tokens: 800,
+        temperature: 0.4,
+      } as any);
+
+      const raw = this.extractOutput(response);
+      if (!raw.trim()) {
+        return { followUps: [] };
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (error) {
+        this.logger.error(`Follow-up response parse failed for user ${request.userId}`, error);
+        throw new Error('Unable to generate follow-up questions. Please try again.');
+      }
+
+      const validation = generateFollowupsResponseSchema.safeParse(parsed);
+      if (!validation.success) {
+        this.logger.error(
+          `Follow-up response validation failed for user ${request.userId}`,
+          JSON.stringify(validation.error.format()),
+        );
+        throw new Error('Unable to generate follow-up questions. Please try again.');
+      }
+
+      return { followUps: this.normaliseFollowUps(validation.data.followUps) };
+    } catch (error: any) {
+      const message = error?.message || 'Unable to generate follow-up questions. Please try again.';
+      this.logger.error(`Follow-up generation failed for user ${request.userId}`, message);
+      throw new Error('Unable to generate follow-up questions. Please try again.');
+    }
+  }
+
+  async transformLetterToJson(request: TransformLetterRequestInternal): Promise<{ letter: StructuredLetter }> {
+    const letterHtml = (request.letterHtml || '').trim();
+    if (!letterHtml) {
+      throw new Error('Letter content is required for transformation.');
+    }
+
+    const senderAddressLines = this.normaliseAddressLines(request.senderAddressLines);
+    const targetDate = (request.date || '').trim() || new Date().toISOString().slice(0, 10);
+    const tone = (request.tone || '').trim();
+
+    const apiKey = this.config.get<string>('OPENAI_API_KEY');
+    if (!apiKey) {
+      const fallback = structuredLetterSchema.parse({
+        recipient: {
+          name: request.mpName,
+          constituency: request.constituency || undefined,
+          addressLines: [],
+        },
+        sender: {
+          name: request.senderName,
+          addressLines: senderAddressLines.length ? senderAddressLines : ['[Add constituent address]'],
+        },
+        date: targetDate,
+        tone: tone || undefined,
+        salutation: `Dear ${request.mpName},`,
+        body: [this.stripHtml(letterHtml) || 'Letter content unavailable in development mode.'],
+        actions: [],
+        conclusion: 'Thank you for your time and attention to this matter.',
+        closing: {
+          signOff: 'Yours sincerely',
+          signature: request.senderName,
+        },
+        references: [],
+      });
+      return { letter: fallback };
+    }
+
+    const systemPrompt = [
+      'You are MP Writer, an assistant that converts fact-checked constituency letters into structured JSON.',
+      'Read the HTML letter and extract each section into the schema provided. Remove inline citation markers such as [1] from the',
+      'body text but keep the underlying sentences intact.',
+      'Summarise the MP\'s action list as bullet points, extract a concise conclusion, and capture up to three references from the',
+      'reference section. Return strictly valid JSON without code fences or commentary.',
+    ].join(' ');
+
+    const addressBlock = senderAddressLines.length
+      ? senderAddressLines.map((line) => `- ${line}`).join('\n')
+      : '- Address not supplied; leave placeholder in JSON.';
+
+    const userPrompt = [
+      `Letter HTML:\n${letterHtml}`,
+      `Recipient: ${request.mpName}${request.constituency ? ` (${request.constituency})` : ''}`,
+      `Sender name: ${request.senderName}`,
+      `Sender address lines:\n${addressBlock}`,
+      `Preferred tone: ${tone || 'not specified'}`,
+      `Use this letter date: ${targetDate}`,
+      'Output a JSON object that matches the schema exactly.',
+    ].join('\n\n');
+
+    try {
+      const { default: OpenAI } = await import('openai');
+      const client = new OpenAI({ apiKey, timeout: 60000 });
+      const configuredModel = this.config.get<string>('OPENAI_TRANSFORM_MODEL')?.trim();
+      const model = configuredModel && configuredModel.length > 0 ? configuredModel : DEFAULT_TRANSFORM_MODEL;
+
+      const response = await client.responses.create({
+        model,
+        input: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        response_format: { type: 'json_schema', json_schema: structuredLetterJsonSchema },
+        max_output_tokens: 1400,
+        temperature: 0.1,
+      } as any);
+
+      const raw = this.extractOutput(response);
+      if (!raw.trim()) {
+        throw new Error('Letter transformation produced an empty response. Please retry.');
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (error) {
+        this.logger.error(`Structured letter parse failed for user ${request.userId}`, error);
+        throw new Error('Unable to parse structured letter output. Please try again.');
+      }
+
+      const validation = structuredLetterSchema.safeParse(parsed);
+      if (!validation.success) {
+        this.logger.error(
+          `Structured letter validation failed for user ${request.userId}`,
+          JSON.stringify(validation.error.format()),
+        );
+        throw new Error('The structured letter did not match the expected schema. Please try again.');
+      }
+
+      const letter = validation.data;
+      if (tone) {
+        letter.tone = tone;
+      }
+      return { letter };
+    } catch (error: any) {
+      const message = error?.message || 'Letter transformation failed unexpectedly. Please try again.';
+      this.logger.error(`Letter transformation failed for user ${request.userId}`, message);
+      throw new Error(message.includes('Please try again') ? message : 'Letter transformation failed unexpectedly.');
+    }
+  }
 
   async enqueueGenerate(request: GenerateJobRequest): Promise<GenerateJobResponse> {
     const userId = request.userId;
@@ -260,7 +510,7 @@ export class AiService {
 
     const researchExpectations = `Research objectives:\n1. Understand the constituent's issue and the outcomes they want.\n2. Identify relevant UK policies, legislation, votes, or programmes the MP can influence.\n3. Gather recent statistics, official statements, or expert findings that strengthen the case.\n4. Surface any timelines, upcoming debates, or consultations the MP should note.`;
 
-    const outputExpectations = `Output requirements:\n- Compose the complete letter within 500 words.\n- Keep the tone ${tone ? tone.toLowerCase() : 'respectful and persuasive'}.\n- Weave evidence-backed arguments that align with the constituent's goals.\n- Present a bulleted list of specific actions for the MP.\n- Return valid HTML only, with semantic tags and no surrounding <html> or <body>.\n- Structure:\n  <div class=\"letter\">\n    <p>Sender address</p>\n    <p>MP greeting</p>\n    <p>Letter body with inline citation numbers like [1]</p>\n    <ul>Bullet actions for the MP</ul>\n    <p>Closing and signature</p>\n    <h3>References</h3>\n    <ol>\n      <li><a href=\"URL\" rel=\"noopener noreferrer\">Title — Source (Year)</a></li>\n    </ol>\n  </div>`;
+    const outputExpectations = `Output requirements:\n- Compose the complete letter within 500 words.\n- Keep the tone ${tone ? tone.toLowerCase() : 'respectful and persuasive'}.\n- Weave evidence-backed arguments that align with the constituent's goals.\n- Present a bulleted list of specific actions for the MP.\n- Return valid HTML only, with semantic tags and no surrounding <html> or <body>.\n- Structure:\n  <div class="letter">\n    <p>Sender address</p>\n    <p>MP greeting</p>\n    <p>Letter body with inline citation numbers like [1]</p>\n    <ul>Bullet actions for the MP</ul>\n    <p>Closing and signature</p>\n    <h3>References</h3>\n    <ol>\n      <li><a href="URL" rel="noopener noreferrer">Title — Source (Year)</a></li>\n    </ol>\n  </div>`;
 
     const userPrompt = `${audienceLine}\n${senderLine}\n${toneInstruction}\n\n${researchExpectations}\n\nIssue summary from the constituent:\n${input.prompt.trim()}\n\n${supportingDetailBlock}\n\n${outputExpectations}\n\nUsing the guidance above, research thoroughly and draft the full letter with inline citations and the required reference list.`;
 
@@ -383,6 +633,55 @@ export class AiService {
     }
 
     return outputText.trim();
+  }
+
+  private normaliseFollowUps(
+    followUps: GenerateFollowupsResponse['followUps'],
+  ): GenerateFollowupsResponse['followUps'] {
+    const result: GenerateFollowupsResponse['followUps'] = [];
+    const seen = new Set<string>();
+
+    followUps.forEach((item) => {
+      if (!item || result.length >= 4) {
+        return;
+      }
+      const question = (item.question || '').trim();
+      if (!question) {
+        return;
+      }
+
+      const preferred = this.slugify((item.id || '').trim()) || this.slugify(question).slice(0, 60);
+      const base = preferred || `follow-up-${result.length + 1}`;
+      let candidate = base;
+      let counter = 1;
+      while (seen.has(candidate) && counter < 10) {
+        candidate = `${base}-${counter}`;
+        counter += 1;
+      }
+      seen.add(candidate);
+      result.push({ id: candidate, question });
+    });
+
+    return result;
+  }
+
+  private normaliseAddressLines(lines: string[]): string[] {
+    return (lines || [])
+      .map((line) => (line || '').trim())
+      .filter((line) => Boolean(line))
+      .slice(0, 5);
+  }
+
+  private stripHtml(value: string): string {
+    return value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  private slugify(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .replace(/-{2,}/g, '-');
   }
 
   private buildToolingConfiguration(usingDeepResearchModel: boolean): {

@@ -9,52 +9,42 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-export class FollowUpDetailDto {
+export class FollowUpContextDto {
   @IsString()
   @IsNotEmpty()
-  question!: string;
+  @MaxLength(1000)
+  id!: string;
 
   @IsString()
   @IsNotEmpty()
   @MaxLength(1000)
-  answer!: string;
-}
-
-export class GenerateDto {
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(4000)
   prompt!: string;
 
   @IsString()
-  @IsOptional()
-  model?: string;
+  @IsNotEmpty()
+  @MaxLength(4000)
+  answer!: string;
+}
 
+export class GenerateFollowupsDto {
   @IsString()
-  @IsOptional()
-  tone?: string;
+  @IsNotEmpty()
+  @MaxLength(4000)
+  issueSummary!: string;
 
-  @IsOptional()
   @IsArray()
-  @ArrayMaxSize(8)
+  @ArrayMaxSize(10)
   @ValidateNested({ each: true })
-  @Type(() => FollowUpDetailDto)
-  details?: FollowUpDetailDto[];
+  @Type(() => FollowUpContextDto)
+  contextAnswers!: FollowUpContextDto[];
 
   @IsString()
   @IsOptional()
+  @MaxLength(200)
   mpName?: string;
 
   @IsString()
   @IsOptional()
+  @MaxLength(200)
   constituency?: string;
-
-  @IsString()
-  @IsOptional()
-  userName?: string;
-
-  @IsString()
-  @IsOptional()
-  userAddressLine?: string;
 }
-

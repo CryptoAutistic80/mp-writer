@@ -1,0 +1,26 @@
+{
+  "name": "api-types",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "root": "libs/api-types",
+  "sourceRoot": "libs/api-types/src",
+  "projectType": "library",
+  "targets": {
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "outputs": ["{options.outputFile}"],
+      "options": {
+        "lintFilePatterns": ["libs/api-types/**/*.ts"]
+      }
+    },
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{workspaceRoot}/dist/libs/api-types"],
+      "options": {
+        "main": "libs/api-types/src/index.ts",
+        "outputPath": "dist/libs/api-types",
+        "tsConfig": "libs/api-types/tsconfig.lib.json"
+      }
+    }
+  },
+  "tags": ["scope:shared", "layer:util", "type:lib"]
+}

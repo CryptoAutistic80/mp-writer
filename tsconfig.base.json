@@ -15,7 +15,9 @@
     "skipDefaultLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@mp-writer/nest-modules": ["nest-modules/src/index.ts"]
+      "@mp-writer/nest-modules": ["nest-modules/src/index.ts"],
+      "@mp-writer/api-types": ["libs/api-types/src/index.ts"],
+      "@mp-writer/api-types/*": ["libs/api-types/src/*"]
     }
   },
   "exclude": ["node_modules", "tmp"]
