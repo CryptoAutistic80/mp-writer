@@ -38,24 +38,29 @@ export class UsersService {
     // Atomic user creation/lookup to prevent race condition during concurrent OAuth logins
     // This fixes avatar fallback issues caused by duplicate user records
     const userEmail = input.email ?? `${input.provider}:${input.providerId}@example.invalid`;
+    const setUpdate: Record<string, unknown> = {};
+    if (input.name !== undefined) {
+      setUpdate.name = input.name;
+    }
+    if (input.image !== undefined) {
+      setUpdate.image = input.image;
+    }
+
+    const update: Record<string, unknown> = {
+      $setOnInsert: { email: userEmail },
+    };
+
+    if (Object.keys(setUpdate).length > 0) {
+      update.$set = setUpdate;
+    }
+
     const user = await this.userModel.findOneAndUpdate(
       { email: userEmail },
-      {
-        $setOnInsert: {
-          email: userEmail,
-          name: input.name,
-          image: input.image,
-        },
-        // Always update name and image in case they changed from OAuth provider
-        $set: {
-          name: input.name,
-          image: input.image,
-        }
-      },
+      update,
       {
         upsert: true,
         new: true, // Return document after update
-        lean: true
+        lean: true,
       }
     );
 

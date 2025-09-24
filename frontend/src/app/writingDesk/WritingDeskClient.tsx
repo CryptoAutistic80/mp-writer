@@ -1,7 +1,12 @@
-"use client";
+'use client';
 
 import Link from 'next/link';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import type {
+  FollowupQuestion,
+  Letter,
+  LetterReference,
+} from '@mp-writer/api-types';
 import DeepResearchProgress from '../../components/DeepResearchProgress';
 
 const QUESTIONS: { id: string; prompt: string }[] = [
@@ -11,13 +16,29 @@ const QUESTIONS: { id: string; prompt: string }[] = [
 ];
 
 const TONES: { id: string; label: string; description: string }[] = [
-  { id: 'formal', label: 'Formal', description: 'Polite and professional with clear respect.' },
-  { id: 'neutral', label: 'Neutral', description: 'Factual, calm and to the point.' },
-  { id: 'friendly', label: 'Friendly', description: 'Warm and conversational while staying respectful.' },
-  { id: 'urgent', label: 'Urgent', description: 'Passionate and time-sensitive but still courteous.' },
+  {
+    id: 'formal',
+    label: 'Formal',
+    description: 'Polite and professional with clear respect.',
+  },
+  {
+    id: 'neutral',
+    label: 'Neutral',
+    description: 'Factual, calm and to the point.',
+  },
+  {
+    id: 'friendly',
+    label: 'Friendly',
+    description: 'Warm and conversational while staying respectful.',
+  },
+  {
+    id: 'urgent',
+    label: 'Urgent',
+    description: 'Passionate and time-sensitive but still courteous.',
+  },
 ];
 
-type Phase = 'issue' | 'questions' | 'tone' | 'review' | 'result';
+type Phase = 'issue' | 'questions' | 'followups' | 'tone' | 'review' | 'result';
 
 type UserContext = {
   mpName: string;
@@ -28,21 +49,43 @@ type UserContext = {
   addressLine: string;
 };
 
+type FollowupAnswerRecord = Record<string, string>;
+
+type ResearchPromptState = 'idle' | 'loading' | 'ready' | 'error';
+
+type FollowupState = 'idle' | 'loading' | 'ready' | 'skipped' | 'error';
+
 export default function WritingDeskClient() {
   const [phase, setPhase] = useState<Phase>('issue');
   const [issue, setIssue] = useState('');
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [questionIndex, setQuestionIndex] = useState(0);
   const [tone, setTone] = useState<string>('formal');
-  const [letter, setLetter] = useState<string | null>(null);
+  const [followupQuestions, setFollowupQuestions] = useState<
+    FollowupQuestion[]
+  >([]);
+  const [followupIndex, setFollowupIndex] = useState(0);
+  const [followupAnswers, setFollowupAnswers] = useState<FollowupAnswerRecord>(
+    {}
+  );
+  const [followupState, setFollowupState] = useState<FollowupState>('idle');
+  const [followupError, setFollowupError] = useState<string | null>(null);
+  const [researchPrompt, setResearchPrompt] = useState<string>('');
+  const [researchPromptState, setResearchPromptState] =
+    useState<ResearchPromptState>('idle');
+  const [structuredLetter, setStructuredLetter] = useState<Letter | null>(null);
+  const [researchSummary, setResearchSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [context, setContext] = useState<UserContext | null>(null);
-  const [contextMessage, setContextMessage] = useState<string>('Loading your saved details…');
   const [notice, setNotice] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [jobMessage, setJobMessage] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [context, setContext] = useState<UserContext | null>(null);
+  const [contextMessage, setContextMessage] = useState<string>(
+    'Loading your saved details…'
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -51,13 +94,17 @@ export default function WritingDeskClient() {
         const [meRes, mpRes, addressRes] = await Promise.all([
           fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' }),
           fetch('/api/user/mp', { credentials: 'include', cache: 'no-store' }),
-          fetch('/api/user/address', { credentials: 'include', cache: 'no-store' }),
+          fetch('/api/user/address', {
+            credentials: 'include',
+            cache: 'no-store',
+          }),
         ]);
 
         if (!meRes.ok) {
-          const message = meRes.status === 401
-            ? 'Please sign in to continue.'
-            : 'We could not load your profile details.';
+          const message =
+            meRes.status === 401
+              ? 'Please sign in to continue.'
+              : 'We could not load your profile details.';
           if (!cancelled) {
             setContextMessage(message);
           }
@@ -68,14 +115,21 @@ export default function WritingDeskClient() {
         const mp = mpRes.ok ? await mpRes.json() : null;
         const addressDoc = addressRes.ok ? await addressRes.json() : null;
         const name = (me?.name as string | undefined) || '';
-        const mpName = mp?.mp?.name || mp?.mp?.fullName || mp?.mp?.displayName || '';
+        const mpName =
+          mp?.mp?.name || mp?.mp?.fullName || mp?.mp?.displayName || '';
         const mpEmail = mp?.mp?.email || '';
         const constituency = mp?.constituency || '';
         const address = addressDoc?.address;
         const addressLine = address
-          ? [address.line1, address.line2, address.city, address.county, address.postcode]
+          ? [
+              address.line1,
+              address.line2,
+              address.city,
+              address.county,
+              address.postcode,
+            ]
               .map((part: string | undefined) => (part || '').trim())
-              .filter((part: string) => Boolean(part))
+              .filter(Boolean)
               .join(', ')
           : '';
 
@@ -91,7 +145,8 @@ export default function WritingDeskClient() {
           setContextMessage('');
         }
       } catch (err) {
-        if (!cancelled) setContextMessage('We could not load your saved details.');
+        if (!cancelled)
+          setContextMessage('We could not load your saved details.');
       }
     })();
     return () => {
@@ -112,11 +167,35 @@ export default function WritingDeskClient() {
   useEffect(() => {
     if (!context) return;
     if (!context.mpName || !context.addressLine) {
-      setContextMessage('Please return to the dashboard to confirm your MP and address before generating a letter.');
+      setContextMessage(
+        'Please return to the dashboard to confirm your MP and address before generating a letter.'
+      );
     }
   }, [context]);
 
-  const currentQuestion = useMemo(() => QUESTIONS[questionIndex], [questionIndex]);
+  const currentQuestion = useMemo(
+    () => QUESTIONS[questionIndex],
+    [questionIndex]
+  );
+  const currentFollowup = useMemo(
+    () => followupQuestions[followupIndex],
+    [followupIndex, followupQuestions]
+  );
+
+  function buildBaseAnswers() {
+    return QUESTIONS.map((question) => ({
+      questionId: question.id,
+      prompt: question.prompt,
+      answer: answers[question.id]?.trim() || 'Not specified.',
+    }));
+  }
+
+  function buildFollowupAnswerArray() {
+    return followupQuestions.map((question) => ({
+      questionId: question.id,
+      answer: followupAnswers[question.id]?.trim() || 'Not specified.',
+    }));
+  }
 
   function handleIssueSubmit(event: FormEvent) {
     event.preventDefault();
@@ -145,9 +224,9 @@ export default function WritingDeskClient() {
     advanceQuestion();
   }
 
-  function advanceQuestion() {
+  async function advanceQuestion() {
     if (questionIndex + 1 >= QUESTIONS.length) {
-      setPhase('tone');
+      await loadFollowupQuestions();
       return;
     }
     setQuestionIndex((prev) => prev + 1);
@@ -156,7 +235,98 @@ export default function WritingDeskClient() {
   function skipQuestion() {
     setError(null);
     setNotice(null);
-    advanceQuestion();
+    if (currentQuestion) {
+      setAnswers((prev) => ({
+        ...prev,
+        [currentQuestion.id]: prev[currentQuestion.id] ?? 'Not specified.',
+      }));
+    }
+    advanceQuestion().catch(() => undefined);
+  }
+
+  async function loadFollowupQuestions() {
+    if (!issue.trim()) {
+      setPhase('tone');
+      return;
+    }
+
+    setFollowupState('loading');
+    setFollowupError(null);
+    try {
+      const res = await fetch('/api/ai/followups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          issueSummary: issue.trim(),
+          baseAnswers: buildBaseAnswers(),
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Unable to retrieve follow-up questions.');
+      }
+
+      const data = await res.json();
+      const questions: FollowupQuestion[] = Array.isArray(data?.questions)
+        ? data.questions
+        : [];
+      if (!questions.length) {
+        setFollowupQuestions([]);
+        setFollowupState('skipped');
+        setPhase('tone');
+        return;
+      }
+
+      setFollowupQuestions(questions);
+      setFollowupAnswers({});
+      setFollowupIndex(0);
+      setFollowupState('ready');
+      setPhase('followups');
+    } catch (err) {
+      setFollowupState('error');
+      setFollowupError(
+        'We could not generate follow-up questions. You can continue without them.'
+      );
+      setFollowupQuestions([]);
+      setPhase('tone');
+    }
+  }
+
+  function handleFollowupSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!currentFollowup) {
+      setPhase('tone');
+      return;
+    }
+    const answer = followupAnswers[currentFollowup.id]?.trim();
+    if (!answer) {
+      setError('Please add a short answer or choose Skip.');
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    advanceFollowup();
+  }
+
+  function advanceFollowup() {
+    if (followupIndex + 1 >= followupQuestions.length) {
+      setPhase('tone');
+      return;
+    }
+    setFollowupIndex((prev) => prev + 1);
+  }
+
+  function skipFollowup() {
+    setError(null);
+    setNotice(null);
+    if (currentFollowup) {
+      setFollowupAnswers((prev) => ({
+        ...prev,
+        [currentFollowup.id]: prev[currentFollowup.id] ?? 'Not specified.',
+      }));
+    }
+    advanceFollowup();
   }
 
   function backToPrevious() {
@@ -170,28 +340,202 @@ export default function WritingDeskClient() {
       }
       return;
     }
-    if (phase === 'tone') {
-      setPhase('questions');
-      setQuestionIndex(Math.max(QUESTIONS.length - 1, 0));
+
+    if (phase === 'followups') {
+      if (followupIndex === 0) {
+        setPhase('questions');
+      } else {
+        setFollowupIndex((prev) => Math.max(prev - 1, 0));
+      }
       return;
     }
+
+    if (phase === 'tone') {
+      if (followupQuestions.length) {
+        setPhase('followups');
+      } else {
+        setPhase('questions');
+        setQuestionIndex(Math.max(QUESTIONS.length - 1, 0));
+      }
+      return;
+    }
+
     if (phase === 'review') {
       setPhase('tone');
       return;
     }
+
     if (phase === 'result') {
       setPhase('review');
     }
   }
 
-  function clearJobPolling() {
-    if (pollTimeoutRef.current) {
-      clearTimeout(pollTimeoutRef.current);
-      pollTimeoutRef.current = null;
+  async function ensureResearchPrompt() {
+    if (researchPromptState === 'loading') {
+      return false;
+    }
+
+    if (researchPrompt && researchPromptState === 'ready') {
+      return true;
+    }
+
+    return refreshResearchPrompt();
+  }
+
+  async function refreshResearchPrompt() {
+    if (!issue.trim()) {
+      setError('Please describe your issue before generating a research plan.');
+      return false;
+    }
+
+    setResearchPromptState('loading');
+    setError(null);
+    try {
+      const res = await fetch('/api/ai/research-prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          issueSummary: issue.trim(),
+          baseAnswers: buildBaseAnswers(),
+          followupAnswers: buildFollowupAnswerArray(),
+          tone,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to generate research prompt.');
+      }
+
+      const data = await res.json();
+      setResearchPrompt(data?.prompt ?? '');
+      setResearchPromptState('ready');
+      return true;
+    } catch (err) {
+      setResearchPromptState('error');
+      setError('We could not generate the research plan. Please try again.');
+      return false;
     }
   }
 
-  async function pollJob(jobId: string) {
+  async function goToReview() {
+    const ready = await ensureResearchPrompt();
+    if (!ready) {
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    setPhase('review');
+  }
+
+  async function handleGenerate() {
+    if (!context) {
+      setError('Please sign in and set up your details first.');
+      return;
+    }
+
+    const ready = await ensureResearchPrompt();
+    if (!ready) {
+      return;
+    }
+
+    if (activeJobId) {
+      clearJobPolling();
+      setActiveJobId(null);
+    }
+
+    setIsGenerating(true);
+    setStructuredLetter(null);
+    setResearchSummary(null);
+    setError(null);
+    setNotice(null);
+    setJobMessage('Submitting your deep research request…');
+
+    const baseAnswers = buildBaseAnswers();
+    const followupAnswerArray = buildFollowupAnswerArray();
+
+    try {
+      const res = await fetch('/api/ai/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          issueSummary: issue.trim(),
+          baseAnswers,
+          followupAnswers: followupAnswerArray,
+          tone,
+          researchPrompt,
+          mpName: context.mpName,
+          constituency: context.constituency,
+          userName: context.userName,
+          userAddressHtml: addressToHtml(context.addressLine),
+        }),
+      });
+
+      if (res.status === 400 || res.status === 402) {
+        setIsGenerating(false);
+        setJobMessage(null);
+        setError('You need at least one credit to generate a letter.');
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          'The AI service was unable to start deep research just now.'
+        );
+      }
+
+      const data = await res.json();
+
+      if (typeof data?.credits === 'number') {
+        setContext((prev) =>
+          prev ? { ...prev, credits: data.credits } : prev
+        );
+      }
+
+      if (typeof data?.message === 'string') {
+        setJobMessage(data.message);
+      }
+
+      if (typeof data?.jobId !== 'string' || !data.jobId) {
+        throw new Error('Deep research job identifier missing in response.');
+      }
+
+      setActiveJobId(data.jobId);
+      pollJob(data.jobId, {
+        issueSummary: issue.trim(),
+        baseAnswers,
+        followupAnswers: followupAnswerArray,
+        tone,
+      }).catch(() => {
+        clearJobPolling();
+        setError(
+          'We could not connect to the AI service. Please try again shortly.'
+        );
+        setIsGenerating(false);
+        setActiveJobId(null);
+        setJobMessage(null);
+      });
+    } catch (err) {
+      clearJobPolling();
+      setError(
+        'We could not connect to the AI service. Please try again shortly.'
+      );
+      setIsGenerating(false);
+      setActiveJobId(null);
+      setJobMessage(null);
+    }
+  }
+
+  async function pollJob(
+    jobId: string,
+    contextPayload: {
+      issueSummary: string;
+      baseAnswers: ReturnType<typeof buildBaseAnswers>;
+      followupAnswers: ReturnType<typeof buildFollowupAnswerArray>;
+      tone: string;
+    }
+  ) {
     try {
       const res = await fetch(`/api/ai/generate/${jobId}`, {
         credentials: 'include',
@@ -204,7 +548,9 @@ export default function WritingDeskClient() {
       const data = await res.json();
 
       if (typeof data?.credits === 'number') {
-        setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
+        setContext((prev) =>
+          prev ? { ...prev, credits: data.credits } : prev
+        );
       }
 
       if (typeof data?.message === 'string') {
@@ -213,18 +559,17 @@ export default function WritingDeskClient() {
 
       if (data?.status === 'completed' && typeof data?.content === 'string') {
         clearJobPolling();
-        const html = normaliseLetterHtml(data.content);
-        setLetter(enhanceCitations(html));
-        setPhase('result');
-        setIsGenerating(false);
-        setActiveJobId(null);
-        setJobMessage(null);
+        setResearchSummary(data.content);
+        await composeLetter(jobId, data.content, contextPayload);
         return;
       }
 
       if (data?.status === 'failed') {
         clearJobPolling();
-        setError(data?.error || 'The AI service was unable to draft your letter just now.');
+        setError(
+          data?.error ||
+            'The AI service was unable to complete the research just now.'
+        );
         setIsGenerating(false);
         setActiveJobId(null);
         setJobMessage(null);
@@ -232,9 +577,11 @@ export default function WritingDeskClient() {
       }
 
       pollTimeoutRef.current = setTimeout(() => {
-        pollJob(jobId).catch(() => {
+        pollJob(jobId, contextPayload).catch(() => {
           clearJobPolling();
-          setError('We could not connect to the AI service. Please try again shortly.');
+          setError(
+            'We could not connect to the AI service. Please try again shortly.'
+          );
           setIsGenerating(false);
           setActiveJobId(null);
           setJobMessage(null);
@@ -242,469 +589,91 @@ export default function WritingDeskClient() {
       }, 5000);
     } catch (err) {
       clearJobPolling();
-      setError('We could not connect to the AI service. Please try again shortly.');
+      setError(
+        'We could not connect to the AI service. Please try again shortly.'
+      );
       setIsGenerating(false);
       setActiveJobId(null);
       setJobMessage(null);
     }
   }
 
-  function normaliseLetterHtml(raw: string): string {
-    let s = (raw || '').trim();
-    // 1) Strip code fences if present
-    s = s.replace(/^```\s*html\s*/i, '').replace(/^```/, '').replace(/```\s*$/m, '').trim();
-
-    // 2) Decode HTML entities to real tags if output was escaped
-    if (/&lt;|&gt;|&amp;/.test(s)) {
-      const t = document.createElement('textarea');
-      t.innerHTML = s;
-      s = t.value;
+  async function composeLetter(
+    jobId: string,
+    summary: string,
+    contextPayload: {
+      issueSummary: string;
+      baseAnswers: ReturnType<typeof buildBaseAnswers>;
+      followupAnswers: ReturnType<typeof buildFollowupAnswerArray>;
+      tone: string;
     }
-
-    const looksLikeHtml = /<\s*[a-z][\s\S]*>/i.test(s);
-
-    if (!looksLikeHtml) {
-      // 3) Convert Markdown/plaintext to HTML
-      s = markdownToHtml(s);
-    }
-
-    // 4) Linkify any leftover bare URLs inside existing HTML safely
-    s = linkifyHtml(s);
-    return s;
-  }
-
-  function markdownToHtml(md: string): string {
-    const lines = md.replace(/\r\n?/g, '\n').split('\n');
-    const html: string[] = [];
-    let i = 0;
-    const flushPara = (buf: string[]) => {
-      if (!buf.length) return;
-      const text = buf.join('\n');
-      html.push(`<p>${inlineMarkdown(text).replace(/\n/g, '<br/>')}</p>`);
-      buf.length = 0;
-    };
-    const inlineMarkdown = (s: string) => {
-      // Links [text](url)
-      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, t, u) =>
-        `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`,
-      );
-      // Bold **text** or __text__
-      s = s.replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_m, a, b) => `<strong>${a || b}</strong>`);
-      // Italic *text* or _text_
-      s = s.replace(/\*(?!\s)([^*]+)\*(?!\S)|_(?!\s)([^_]+)_(?!\S)/g, (_m, a, b) => `<em>${a || b}</em>`);
-      return s;
-    };
-
-    while (i < lines.length) {
-      // Skip leading blank lines
-      if (!lines[i].trim()) {
-        i++;
-        continue;
-      }
-
-      // Headings ###, ##, # (map # -> h2 to keep sizes modest)
-      const heading = lines[i].match(/^(#{1,6})\s+(.*)$/);
-      if (heading) {
-        const level = Math.min(3, heading[1].length + 1); // #->h2, ##->h3, ###+->h3
-        html.push(`<h${level}>${inlineMarkdown(heading[2].trim())}</h${level}>`);
-        i++;
-        continue;
-      }
-
-      // References label
-      if (/^references\s*:?$/i.test(lines[i].trim())) {
-        html.push('<h3>References</h3>');
-        i++;
-        continue;
-      }
-
-      // Ordered list
-      if (/^\d+\.\s+/.test(lines[i])) {
-        const items: string[] = [];
-        while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
-          const text = lines[i].replace(/^\d+\.\s+/, '');
-          items.push(`<li>${inlineMarkdown(text)}</li>`);
-          i++;
-        }
-        html.push(`<ol>${items.join('')}</ol>`);
-        continue;
-      }
-
-      // Unordered list
-      if (/^[-*+]\s+/.test(lines[i])) {
-        const items: string[] = [];
-        while (i < lines.length && /^[-*+]\s+/.test(lines[i])) {
-          const text = lines[i].replace(/^[-*+]\s+/, '');
-          items.push(`<li>${inlineMarkdown(text)}</li>`);
-          i++;
-        }
-        html.push(`<ul>${items.join('')}</ul>`);
-        continue;
-      }
-
-      // Paragraph block until blank line
-      const buf: string[] = [];
-      while (i < lines.length && lines[i].trim()) {
-        buf.push(lines[i]);
-        i++;
-      }
-      flushPara(buf);
-    }
-
-    return html.join('\n');
-  }
-
-  function linkifyHtml(html: string): string {
-    const container = document.createElement('div');
-    container.innerHTML = html;
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-    const urlRe = /(https?:\/\/[^\s<>()]+[^\s.,;:!?<>()\]\}])/g;
-    const toProcess: Text[] = [];
-    let node: Node | null = walker.nextNode();
-    while (node) {
-      // ignore inside existing anchors
-      if (!node.parentElement || node.parentElement.closest('a')) {
-        node = walker.nextNode();
-        continue;
-      }
-      if (urlRe.test(node.textContent || '')) {
-        toProcess.push(node as Text);
-      }
-      node = walker.nextNode();
-    }
-    toProcess.forEach((textNode) => {
-      const parts = (textNode.textContent || '').split(urlRe);
-      const frag = document.createDocumentFragment();
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        if (!part) continue;
-        if (/^https?:\/\//.test(part)) {
-          const a = document.createElement('a');
-          a.href = part;
-          a.textContent = part;
-          a.target = '_blank';
-          a.rel = 'noopener noreferrer';
-          frag.appendChild(a);
-        } else {
-          frag.appendChild(document.createTextNode(part));
-        }
-      }
-      textNode.replaceWith(frag);
-    });
-    return container.innerHTML;
-  }
-
-  // Debug function - can be called from browser console: testReferencesDetection()
-  (window as any).testReferencesDetection = () => {
-    const testCases = [
-      {
-        name: "Standard AI format",
-        html: `<div class="letter">
-          <p>Dear MP,</p>
-          <p>This is a test with citations [1].</p>
-          <h3>References</h3>
-          <ol>
-            <li><a href="https://example.com">Test Source — Gov (2024)</a></li>
-          </ol>
-        </div>`
-      },
-      {
-        name: "References without immediate sibling",
-        html: `<div class="letter">
-          <p>Dear MP,</p>
-          <p>This is a test with citations [1].</p>
-          <div>
-            <h3>References</h3>
-          </div>
-          <ol>
-            <li><a href="https://example.com">Test Source — Gov (2024)</a></li>
-          </ol>
-        </div>`
-      },
-      {
-        name: "No references section",
-        html: `<div class="letter">
-          <p>Dear MP,</p>
-          <p>This is a test without references.</p>
-        </div>`
-      }
-    ];
-
-    testCases.forEach(testCase => {
-      console.log(`\n=== Testing: ${testCase.name} ===`);
-      const result = enhanceCitations(testCase.html);
-      console.log('Input:', testCase.html);
-      console.log('Output:', result);
-    });
-  };
-
-  function enhanceCitations(html: string): string {
-    const findReferencesList = (
-      container: HTMLElement,
-    ): HTMLOListElement | HTMLUListElement | null => {
-      const heading = Array.from(container.querySelectorAll('h1,h2,h3,h4,h5,h6')).find((candidate) =>
-        /^references\b/i.test((candidate.textContent || '').trim()),
-      );
-      if (!heading) {
-        return null;
-      }
-
-      const sibling = heading.nextElementSibling;
-      if (sibling && /^(ol|ul)$/i.test(sibling.tagName)) {
-        return sibling as HTMLOListElement | HTMLUListElement;
-      }
-
-      const parentList = heading.parentElement?.querySelector('ol,ul');
-      if (parentList) {
-        return parentList as HTMLOListElement | HTMLUListElement;
-      }
-
-      return null;
-    };
-
-    const root = document.createElement('div');
-    root.innerHTML = html;
-
-    // Debug: Log the HTML structure
-    console.log('=== DEBUGGING REFERENCES ===');
-    console.log('Raw HTML:', html);
-    console.log('Root element:', root);
-    
-    // Debug: Check what headings exist
-    const allHeadings = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6'));
-    console.log('Found headings:', allHeadings.map(h => ({
-      tag: h.tagName,
-      text: h.textContent?.trim(),
-      matches: /^references\b/i.test((h.textContent || '').trim())
-    })));
-
-    const refsList = findReferencesList(root);
-    console.log('References list found:', refsList);
-    console.log('=== END DEBUG ===');
-    const urlToIndex = new Map<string, number>();
-    const normalise = (u: string) => {
-      try {
-        const url = new URL(u);
-        return `${url.protocol}//${url.host}${url.pathname}`;
-      } catch {
-        return u.trim();
-      }
-    };
-
-    const items = refsList ? Array.from(refsList.querySelectorAll('li')) : [];
-    items.forEach((li, i) => {
-      const anchor = li.querySelector<HTMLAnchorElement>('a[href]');
-      if (!anchor || !anchor.href) {
-        return;
-      }
-      const idx = i + 1;
-      const norm = normalise(anchor.href);
-      if (!urlToIndex.has(norm)) {
-        urlToIndex.set(norm, idx);
-      }
-      li.id = `ref-${idx}`;
-    });
-    let nextIndex = items.length + 1;
-
-    const appendReference = refsList
-      ? (href: string): number | null => {
-          const trimmed = href.trim();
-          if (!trimmed || trimmed.startsWith('#')) {
-            return null;
-          }
-          const norm = normalise(trimmed);
-          const existing = urlToIndex.get(norm);
-          if (existing) {
-            return existing;
-          }
-          const li = document.createElement('li');
-          const anchor = document.createElement('a');
-          anchor.href = trimmed;
-          anchor.target = '_blank';
-          anchor.rel = 'noopener noreferrer';
-          try {
-            const parsed = new URL(trimmed);
-            anchor.textContent = `${parsed.hostname.replace(/^www\./, '')} — ${parsed.pathname.replace(/\/$/, '')}`;
-          } catch {
-            anchor.textContent = trimmed;
-          }
-          li.appendChild(anchor);
-          refsList.appendChild(li);
-          const assigned = nextIndex++;
-          li.id = `ref-${assigned}`;
-          urlToIndex.set(norm, assigned);
-          return assigned;
-        }
-      : () => null;
-
-    const recordReference = (href: string | null | undefined) => {
-      if (!href) {
-        return;
-      }
-      appendReference(href);
-    };
-
-    const anchors = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]'));
-    anchors.forEach((anchor) => {
-      if (refsList && refsList.contains(anchor)) {
-        return;
-      }
-      const href = anchor.getAttribute('href') || anchor.href || '';
-      if (href && !href.startsWith('#')) {
-        recordReference(href);
-      }
-      const textContent = anchor.textContent || '';
-      if (/^\s*(?:\[\s*\d+\s*\]|【\s*\d+\s*】)\s*$/.test(textContent)) {
-        anchor.remove();
-        return;
-      }
-      anchor.replaceWith(document.createTextNode(textContent));
-    });
-
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const citationNumber = /(?:\s|\u00A0)*(?:\[\s*\d+\s*\]|【\s*\d+\s*】|\(\s*\d+\s*\))(?:[,.;:])?/g;
-    const markdownLink = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi;
-    const parenWithUrl = new RegExp(
-      String.raw`\(\s*(?:\[)?(https?:\/\/[^\s)\]]+)(?:\])?(?:\s*\[[0-9]+\])?\s*\)`,
-      'gi',
-    );
-    let current: Node | null = walker.nextNode();
-    while (current) {
-      const parentEl = current.parentElement;
-      if (parentEl && refsList && refsList.contains(parentEl)) {
-        current = walker.nextNode();
-        continue;
-      }
-
-      let text = current.textContent || '';
-      if (!text.trim()) {
-        current = walker.nextNode();
-        continue;
-      }
-
-      text = text.replace(markdownLink, (_match, linkText, url) => {
-        recordReference(url);
-        return linkText;
-      });
-
-      text = text.replace(parenWithUrl, (_match, url: string) => {
-        recordReference(url);
-        return '';
-      });
-
-      text = text.replace(/\[(?:https?:\/\/|www\.)[^\]]+\]/gi, '');
-      text = text.replace(citationNumber, '');
-      text = text.replace(/\s{2,}/g, ' ');
-      text = text.replace(/\(\s*\)/g, '');
-      if (text !== current.textContent) {
-        current.textContent = text;
-      }
-
-      current = walker.nextNode();
-    }
-
-    let output = root.innerHTML;
-    output = output.replace(/\s{2,}/g, ' ');
-    output = output.replace(/\(\s*\)/g, '');
-    return output;
-  }
-
-  async function handleGenerate() {
+  ) {
     if (!context) {
-      setError('Please sign in and set up your details first.');
+      setError('Session expired. Please sign in again.');
+      setIsGenerating(false);
+      setActiveJobId(null);
+      setJobMessage(null);
       return;
     }
 
-    if (activeJobId) {
-      clearJobPolling();
-      setActiveJobId(null);
-    }
-
-    setIsGenerating(true);
-    setError(null);
-    setNotice(null);
-    setLetter(null);
-    setJobMessage('Submitting your deep research request…');
     try {
-      const details = QUESTIONS.map((question) => ({
-        question: question.prompt,
-        answer: answers[question.id]?.trim() || 'Not specified.',
-      }));
-
-      const res = await fetch('/api/ai/generate', {
+      const res = await fetch('/api/ai/compose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          prompt: issue,
-          tone,
-          details,
+          jobId,
+          issueSummary: contextPayload.issueSummary,
+          baseAnswers: contextPayload.baseAnswers,
+          followupAnswers: contextPayload.followupAnswers,
+          tone: contextPayload.tone,
+          researchSummary: summary,
           mpName: context.mpName,
           constituency: context.constituency,
           userName: context.userName,
-          userAddressLine: context.addressLine,
+          userAddressHtml: addressToHtml(context.addressLine),
         }),
       });
 
-      if (res.status === 400 || res.status === 402) {
-        setIsGenerating(false);
-        setJobMessage(null);
-        setError('You need at least one credit to generate a letter.');
-        return;
-      }
-
       if (!res.ok) {
-        setIsGenerating(false);
-        setJobMessage(null);
-        setError('The AI service was unable to draft your letter just now.');
-        return;
+        throw new Error('Failed to compose the letter.');
       }
 
       const data = await res.json();
-
-      if (typeof data?.credits === 'number') {
-        setContext((prev) => (prev ? { ...prev, credits: data.credits } : prev));
+      if (!data?.letter) {
+        throw new Error('Letter data missing from response.');
       }
 
-      if (typeof data?.message === 'string') {
-        setJobMessage(data.message);
-      }
-
-      if (typeof data?.jobId !== 'string' || !data.jobId) {
-        throw new Error('Deep research job identifier missing in response.');
-      }
-
-      setActiveJobId(data.jobId);
-      pollJob(data.jobId).catch(() => {
-        clearJobPolling();
-        setError('We could not connect to the AI service. Please try again shortly.');
-        setIsGenerating(false);
-        setActiveJobId(null);
-        setJobMessage(null);
-      });
+      setStructuredLetter(data.letter as Letter);
+      setIsGenerating(false);
+      setActiveJobId(null);
+      setJobMessage(null);
+      setPhase('result');
     } catch (err) {
-      clearJobPolling();
-      setError('We could not connect to the AI service. Please try again shortly.');
+      setError('We could not compose the letter. Please try again.');
       setIsGenerating(false);
       setActiveJobId(null);
       setJobMessage(null);
     }
   }
 
+  function clearJobPolling() {
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+  }
+
   async function copyLetter() {
-    if (!letter) return;
-    const asPlainText = (() => {
-      // Basic HTML -> text fallback
-      const div = document.createElement('div');
-      div.innerHTML = letter;
-      return div.textContent || div.innerText || '';
-    })();
+    if (!structuredLetter) return;
+    const html = letterToHtml(structuredLetter);
+    const asPlainText = letterToPlainText(structuredLetter);
 
     try {
       const cb: any = (navigator as any).clipboard;
       if (cb && typeof cb.write === 'function') {
         const type = 'text/html';
-        const blob = new Blob([letter], { type });
+        const blob = new Blob([html], { type });
         const data = [
           new ClipboardItem({
             [type]: blob,
@@ -737,12 +706,18 @@ export default function WritingDeskClient() {
         <div className="container writing-header">
           <div>
             <h1 className="section-title">Writing desk</h1>
-            <p className="section-sub">Answer a few quick questions and we will draft a fact-checked letter for you.</p>
+            <p className="section-sub">
+              Answer a few quick questions and we will draft a fact-checked
+              letter for you.
+            </p>
           </div>
           <div className="writing-context">
-            <p><strong>Credits:</strong> {remainingCredits}</p>
             <p>
-              Need more? Visit the <Link href="/dashboard">dashboard</Link> to buy credits.
+              <strong>Credits:</strong> {remainingCredits}
+            </p>
+            <p>
+              Need more? Visit the <Link href="/dashboard">dashboard</Link> to
+              buy credits.
             </p>
             {context?.mpEmail && (
               <p>
@@ -794,7 +769,9 @@ export default function WritingDeskClient() {
                 onChange={(event) => setIssue(event.target.value)}
               />
               <div className="form-actions">
-                <button type="submit" className="btn-primary">Next</button>
+                <button type="submit" className="btn-primary">
+                  Next
+                </button>
               </div>
             </form>
           </div>
@@ -808,7 +785,10 @@ export default function WritingDeskClient() {
               <div className="step-indicator">
                 Step {questionIndex + 1} of {QUESTIONS.length}
               </div>
-              <label htmlFor={`question-${currentQuestion.id}`} className="label">
+              <label
+                htmlFor={`question-${currentQuestion.id}`}
+                className="label"
+              >
                 {currentQuestion.prompt}
               </label>
               <textarea
@@ -819,14 +799,25 @@ export default function WritingDeskClient() {
                 placeholder="Add a short answer."
                 value={answers[currentQuestion.id] ?? ''}
                 onChange={(event) =>
-                  setAnswers((prev) => ({ ...prev, [currentQuestion.id]: event.target.value }))
+                  setAnswers((prev) => ({
+                    ...prev,
+                    [currentQuestion.id]: event.target.value,
+                  }))
                 }
               />
               <div className="form-actions">
-                <button type="button" className="btn-secondary" onClick={backToPrevious}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={backToPrevious}
+                >
                   Back
                 </button>
-                <button type="button" className="btn-tertiary" onClick={skipQuestion}>
+                <button
+                  type="button"
+                  className="btn-tertiary"
+                  onClick={skipQuestion}
+                >
                   Skip
                 </button>
                 <button type="submit" className="btn-primary">
@@ -838,12 +829,89 @@ export default function WritingDeskClient() {
         </section>
       )}
 
+      {phase === 'followups' && followupState === 'loading' && (
+        <section className="card" aria-live="polite">
+          <div className="container">
+            <p>Generating follow-up questions…</p>
+          </div>
+        </section>
+      )}
+
+      {phase === 'followups' &&
+        followupState === 'ready' &&
+        currentFollowup && (
+          <section className="card">
+            <div className="container">
+              <form className="writing-form" onSubmit={handleFollowupSubmit}>
+                <div className="step-indicator">
+                  Follow-up {followupIndex + 1} of {followupQuestions.length}
+                </div>
+                <label
+                  htmlFor={`followup-${currentFollowup.id}`}
+                  className="label"
+                >
+                  {currentFollowup.prompt}
+                </label>
+                <textarea
+                  id={`followup-${currentFollowup.id}`}
+                  name={currentFollowup.id}
+                  className="textarea"
+                  rows={4}
+                  placeholder="Add a short answer."
+                  value={followupAnswers[currentFollowup.id] ?? ''}
+                  onChange={(event) =>
+                    setFollowupAnswers((prev) => ({
+                      ...prev,
+                      [currentFollowup.id]: event.target.value,
+                    }))
+                  }
+                />
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={backToPrevious}
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-tertiary"
+                    onClick={skipFollowup}
+                  >
+                    Skip
+                  </button>
+                  <button type="submit" className="btn-primary">
+                    {followupIndex + 1 === followupQuestions.length
+                      ? 'Continue'
+                      : 'Next'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+        )}
+
       {phase === 'tone' && (
         <section className="card">
           <div className="container">
-            <div className="tone-options" role="radiogroup" aria-label="Choose a tone for your letter">
+            {followupError && (
+              <div className="flash-message warning" role="alert">
+                {followupError}
+              </div>
+            )}
+            <div
+              className="tone-options"
+              role="radiogroup"
+              aria-label="Choose a tone for your letter"
+            >
               {TONES.map((option) => (
-                <label key={option.id} className={`tone-card ${tone === option.id ? 'selected' : ''}`}>
+                <label
+                  key={option.id}
+                  className={`tone-card ${
+                    tone === option.id ? 'selected' : ''
+                  }`}
+                >
                   <input
                     type="radio"
                     name="tone"
@@ -857,10 +925,18 @@ export default function WritingDeskClient() {
               ))}
             </div>
             <div className="form-actions">
-              <button type="button" className="btn-secondary" onClick={backToPrevious}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={backToPrevious}
+              >
                 Back
               </button>
-              <button type="button" className="btn-primary" onClick={() => setPhase('review')}>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={goToReview}
+              >
                 Review inputs
               </button>
             </div>
@@ -871,58 +947,121 @@ export default function WritingDeskClient() {
       {phase === 'review' && (
         <section className="card">
           <div className="container review-card">
-            <h2 className="section-title">Review your answers</h2>
+            <h2 className="section-title">Review your inputs</h2>
             <dl>
               <dt>Issue summary</dt>
               <dd>{issue || 'Not provided'}</dd>
+
               {QUESTIONS.map((question) => (
                 <div key={question.id} className="review-item">
                   <dt>{question.prompt}</dt>
                   <dd>{answers[question.id]?.trim() || 'Not specified'}</dd>
                 </div>
               ))}
+
+              {followupQuestions.length > 0 && (
+                <div className="review-item">
+                  <dt>Follow-up answers</dt>
+                  <dd>
+                    <ul className="followup-list">
+                      {followupQuestions.map((followup) => (
+                        <li key={followup.id}>
+                          <strong>{followup.prompt}</strong>
+                          <div>
+                            {followupAnswers[followup.id]?.trim() ||
+                              'Not specified'}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </div>
+              )}
+
               <dt>Preferred tone</dt>
               <dd>{TONES.find((item) => item.id === tone)?.label ?? tone}</dd>
             </dl>
+
+            <div className="research-prompt">
+              <div className="research-header">
+                <h3>Research plan</h3>
+                <button
+                  type="button"
+                  className="btn-tertiary"
+                  onClick={refreshResearchPrompt}
+                  disabled={researchPromptState === 'loading'}
+                >
+                  {researchPromptState === 'loading'
+                    ? 'Refreshing…'
+                    : 'Regenerate plan'}
+                </button>
+              </div>
+              {researchPromptState === 'loading' && (
+                <p>Generating latest research plan…</p>
+              )}
+              {researchPromptState === 'ready' && (
+                <pre className="research-plan" aria-live="polite">
+                  {researchPrompt}
+                </pre>
+              )}
+              {researchPromptState === 'error' && (
+                <p className="error-text">
+                  We could not prepare the research plan. Try again before
+                  generating the letter.
+                </p>
+              )}
+            </div>
+
             <div className="form-actions">
-              <button type="button" className="btn-secondary" onClick={backToPrevious}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={backToPrevious}
+              >
                 Back
               </button>
-              <button type="button" className="btn-primary" onClick={handleGenerate} disabled={isGenerating}>
-                {isGenerating ? 'Generating…' : 'Generate letter'}
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleGenerate}
+                disabled={isGenerating}
+              >
+                {isGenerating ? 'Researching…' : 'Generate letter'}
               </button>
             </div>
           </div>
         </section>
       )}
 
-      {phase === 'result' && (
+      {phase === 'result' && structuredLetter && (
         <section className="card">
           <div className="container letter-container">
             <header className="letter-header">
               <h2 className="section-title">Your draft letter</h2>
               <div className="letter-actions">
-                <button type="button" className="btn-secondary" onClick={backToPrevious}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={backToPrevious}
+                >
                   Back
                 </button>
-                <button type="button" className="btn-primary" onClick={copyLetter}>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={copyLetter}
+                >
                   Copy letter
                 </button>
               </div>
             </header>
             <article className="letter-output" aria-live="polite">
-              {letter ? (
-                <div
-                  className="letter-html"
-                  // Letter content is generated by our backend and expected to be HTML.
-                  dangerouslySetInnerHTML={{ __html: letter }}
-                />
-              ) : null}
+              <StructuredLetter letter={structuredLetter} />
             </article>
             <footer className="letter-footer">
               <p>
-                Ready to send? You can email your MP directly using their address above or paste this into your
-                preferred email client.
+                Ready to send? You can email your MP directly using their
+                address above or paste this into your preferred email client.
               </p>
             </footer>
           </div>
@@ -932,10 +1071,20 @@ export default function WritingDeskClient() {
       {isGenerating && (
         <section className="card" aria-live="polite">
           <div className="container">
-            <DeepResearchProgress active={isGenerating} messageOverride={jobMessage} />
+            <DeepResearchProgress
+              active={isGenerating}
+              messageOverride={jobMessage}
+            />
+            {researchSummary && (
+              <details className="research-summary">
+                <summary>View research summary</summary>
+                <pre>{researchSummary}</pre>
+              </details>
+            )}
           </div>
         </section>
       )}
+
       {notice && (
         <section className="card" aria-live="polite">
           <div className="container">
@@ -955,3 +1104,156 @@ export default function WritingDeskClient() {
   );
 }
 
+function StructuredLetter({ letter }: { letter: Letter }) {
+  const references = letter.references ?? [];
+
+  return (
+    <div className="letter-html">
+      {letter.sender.addressHtml && (
+        <div dangerouslySetInnerHTML={{ __html: letter.sender.addressHtml }} />
+      )}
+
+      <div dangerouslySetInnerHTML={{ __html: letter.salutationHtml }} />
+
+      {letter.body.paragraphs.map((paragraph, index) => (
+        <div key={index} dangerouslySetInnerHTML={{ __html: paragraph.html }} />
+      ))}
+
+      {letter.body.actions?.length ? (
+        <div className="letter-actions-list">
+          <h3>Requested actions</h3>
+          <ul>
+            {letter.body.actions.map((action, index) => (
+              <li key={index}>
+                <strong>{action.label}</strong>
+                {action.description ? <div>{action.description}</div> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      <div dangerouslySetInnerHTML={{ __html: letter.closingHtml }} />
+
+      {references.length ? (
+        <div className="letter-references">
+          <h3>References</h3>
+          <ol>
+            {references.map((ref, index) => (
+              <li key={index}>
+                {ref.url ? (
+                  <a href={ref.url} target="_blank" rel="noopener noreferrer">
+                    {referenceLabel(ref)}
+                  </a>
+                ) : (
+                  referenceLabel(ref)
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function referenceLabel(ref: LetterReference) {
+  const parts = [ref.title];
+  if (ref.source) parts.push(ref.source);
+  if (ref.year) parts.push(ref.year);
+  return parts.join(' — ');
+}
+
+function letterToHtml(letter: Letter): string {
+  const parts: string[] = [];
+  if (letter.sender.addressHtml) {
+    parts.push(letter.sender.addressHtml);
+  }
+  parts.push(letter.salutationHtml);
+  letter.body.paragraphs.forEach((paragraph) => {
+    parts.push(paragraph.html);
+  });
+  if (letter.body.actions?.length) {
+    const actionItems = letter.body.actions
+      .map((action) => {
+        const description = action.description
+          ? `<div>${escapeHtml(action.description)}</div>`
+          : '';
+        return `<li><strong>${escapeHtml(
+          action.label
+        )}</strong>${description}</li>`;
+      })
+      .join('');
+    parts.push(`<h3>Requested actions</h3><ul>${actionItems}</ul>`);
+  }
+  parts.push(letter.closingHtml);
+  if (letter.references?.length) {
+    const refs = letter.references
+      .map((ref) => {
+        const label = referenceLabel(ref);
+        return ref.url
+          ? `<li><a href="${
+              ref.url
+            }" rel="noopener noreferrer" target="_blank">${escapeHtml(
+              label
+            )}</a></li>`
+          : `<li>${escapeHtml(label)}</li>`;
+      })
+      .join('');
+    parts.push(`<h3>References</h3><ol>${refs}</ol>`);
+  }
+  return `<div class="letter">${parts.join('')}</div>`;
+}
+
+function letterToPlainText(letter: Letter): string {
+  const lines: string[] = [];
+  if (letter.sender.addressHtml) {
+    lines.push(stripHtml(letter.sender.addressHtml));
+  }
+  lines.push(stripHtml(letter.salutationHtml));
+  letter.body.paragraphs.forEach((paragraph) => {
+    lines.push(stripHtml(paragraph.html));
+  });
+  if (letter.body.actions?.length) {
+    lines.push('Requested actions:');
+    letter.body.actions.forEach((action, index) => {
+      const lineParts = [`${index + 1}. ${action.label}`];
+      if (action.description) {
+        lineParts.push(action.description);
+      }
+      lines.push(lineParts.join(' — '));
+    });
+  }
+  lines.push(stripHtml(letter.closingHtml));
+  if (letter.references?.length) {
+    lines.push('References:');
+    letter.references.forEach((ref, index) => {
+      lines.push(`${index + 1}. ${referenceLabel(ref)}`);
+      if (ref.url) {
+        lines.push(`   ${ref.url}`);
+      }
+    });
+  }
+  return lines.filter(Boolean).join('\n\n');
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function addressToHtml(address: string): string {
+  if (!address.trim()) return '';
+  return `<p>${escapeHtml(address.trim())}</p>`;
+}

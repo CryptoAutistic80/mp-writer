@@ -1,0 +1,17 @@
+node_modules
+coverage
+dist
+.git
+.gitignore
+README.md
+plan.md
+**/*.log
+.tmp
+.env.local
+.env.development
+.env.test
+**/__tests__
+**/*.spec.ts
+**/*.spec.tsx
+**/*.test.ts
+**/*.test.tsx
