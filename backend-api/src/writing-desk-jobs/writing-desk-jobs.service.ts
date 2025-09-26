@@ -7,6 +7,8 @@ import {
   WritingDeskJobSnapshot,
   WritingDeskJobFormSnapshot,
   WritingDeskJobRecord,
+  WritingDeskJobResearchSnapshot,
+  WritingDeskJobResearchActivity,
 } from './writing-desk-jobs.types';
 import { EncryptionService } from '../crypto/encryption.service';
 
@@ -29,7 +31,7 @@ export class WritingDeskJobsService {
     input: UpsertActiveWritingDeskJobDto,
   ): Promise<ActiveWritingDeskJobResource> {
     const existing = await this.repository.findActiveByUserId(userId);
-    const sanitized = this.sanitiseInput(input);
+    const sanitized = this.sanitiseInput(input, existing);
     const nextJobId = this.resolveJobId(existing, input.jobId);
     const payload = {
       jobId: nextJobId,
@@ -41,6 +43,12 @@ export class WritingDeskJobsService {
       followUpAnswersCiphertext: this.encryption.encryptObject(sanitized.followUpAnswers),
       notes: sanitized.notes,
       responseId: sanitized.responseId,
+      researchStateCiphertext:
+        typeof sanitized.research === 'undefined'
+          ? undefined
+          : sanitized.research
+            ? this.encryption.encryptObject(sanitized.research)
+            : null,
     };
 
     const saved = await this.repository.upsertActiveJob(userId, payload);
@@ -62,7 +70,7 @@ export class WritingDeskJobsService {
     return randomUUID();
   }
 
-  private sanitiseInput(input: UpsertActiveWritingDeskJobDto) {
+  private sanitiseInput(input: UpsertActiveWritingDeskJobDto, existing: WritingDeskJobRecord | null) {
     const trim = (value: string | undefined | null) => (typeof value === 'string' ? value : '');
     const trimNullable = (value: string | undefined) => {
       if (typeof value !== 'string') return null;
@@ -105,6 +113,7 @@ export class WritingDeskJobsService {
       followUpAnswers: alignedAnswers,
       notes: trimNullable(input.notes),
       responseId: trimNullable(input.responseId),
+      research: this.normaliseResearch(input.research, existing),
     };
   }
 
@@ -126,6 +135,7 @@ export class WritingDeskJobsService {
       followUpAnswers,
       notes: record.notes ?? null,
       responseId: record.responseId ?? null,
+      research: this.decryptResearch(record),
       createdAt,
       updatedAt,
     };
@@ -176,6 +186,142 @@ export class WritingDeskJobsService {
     return [];
   }
 
+  private decryptResearch(record: WritingDeskJobRecord): WritingDeskJobResearchSnapshot | null {
+    if (record.researchStateCiphertext) {
+      try {
+        const decrypted = this.encryption.decryptObject<WritingDeskJobResearchSnapshot>(
+          record.researchStateCiphertext,
+        );
+        return this.normaliseResearchSnapshot(decrypted);
+      } catch {
+        // fall through to legacy/plain handling
+      }
+    }
+
+    if (record.researchState) {
+      return this.normaliseResearchSnapshot(record.researchState);
+    }
+
+    return null;
+  }
+
+  private normaliseResearch(
+    research: UpsertActiveWritingDeskJobDto['research'],
+    existing: WritingDeskJobRecord | null,
+  ): WritingDeskJobResearchSnapshot | null | undefined {
+    if (typeof research === 'undefined') {
+      return undefined;
+    }
+
+    if (research === null) {
+      return null;
+    }
+
+    const fallback = existing ? this.decryptResearch(existing) : null;
+
+    const toDate = (value: string | null | undefined) => {
+      if (typeof value !== 'string') return null;
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+
+    const mapActivities = (activities: unknown): WritingDeskJobResearchActivity[] => {
+      if (!Array.isArray(activities)) {
+        return fallback?.activities ?? [];
+      }
+
+      return activities
+        .map((activity) => {
+          const createdAt = toDate((activity as any)?.createdAt) ?? new Date();
+          return {
+            id: typeof (activity as any)?.id === 'string' ? (activity as any).id : randomUUID(),
+            type: typeof (activity as any)?.type === 'string' ? (activity as any).type : 'unknown',
+            label: typeof (activity as any)?.label === 'string' ? (activity as any).label : 'Activity',
+            status: typeof (activity as any)?.status === 'string' ? (activity as any).status : 'unknown',
+            createdAt,
+            url: typeof (activity as any)?.url === 'string' ? (activity as any).url : null,
+          };
+        })
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    };
+
+    const clampProgress = (value: number | null | undefined) => {
+      if (typeof value !== 'number' || Number.isNaN(value)) {
+        return fallback?.progress ?? null;
+      }
+      return Math.max(0, Math.min(100, Math.round(value)));
+    };
+
+    const snapshot: WritingDeskJobResearchSnapshot = {
+      status: research.status,
+      startedAt: toDate(research.startedAt) ?? fallback?.startedAt ?? null,
+      completedAt: toDate(research.completedAt) ?? fallback?.completedAt ?? null,
+      updatedAt: toDate(research.updatedAt) ?? new Date(),
+      responseId:
+        typeof research.responseId === 'string'
+          ? research.responseId
+          : fallback?.responseId ?? null,
+      outputText:
+        typeof research.outputText === 'string'
+          ? research.outputText
+          : fallback?.outputText ?? null,
+      progress: clampProgress(research.progress),
+      activities: mapActivities(research.activities),
+      error: typeof research.error === 'string' ? research.error : fallback?.error ?? null,
+      creditsCharged:
+        typeof research.creditsCharged === 'number'
+          ? Math.round(research.creditsCharged * 100) / 100
+          : fallback?.creditsCharged ?? null,
+      billedAt: toDate(research.billedAt) ?? fallback?.billedAt ?? null,
+    };
+
+    return snapshot;
+  }
+
+  private normaliseResearchSnapshot(
+    input: WritingDeskJobResearchSnapshot | null,
+  ): WritingDeskJobResearchSnapshot | null {
+    if (!input) return null;
+
+    const toDate = (value: unknown) => this.asDateOrNull(value) ?? new Date();
+
+    return {
+      status: input.status,
+      startedAt: this.asDateOrNull(input.startedAt),
+      completedAt: this.asDateOrNull(input.completedAt),
+      updatedAt: this.asDateOrNull(input.updatedAt) ?? new Date(),
+      responseId: input.responseId ?? null,
+      outputText: input.outputText ?? null,
+      progress:
+        typeof input.progress === 'number' && !Number.isNaN(input.progress)
+          ? Math.max(0, Math.min(100, Math.round(input.progress)))
+          : null,
+      activities: Array.isArray(input.activities)
+        ? input.activities.map((activity) => ({
+            id: activity.id,
+            type: activity.type,
+            label: activity.label,
+            status: activity.status,
+            createdAt: toDate(activity.createdAt),
+            url: activity.url ?? null,
+          }))
+        : [],
+      error: input.error ?? null,
+      creditsCharged:
+        typeof input.creditsCharged === 'number'
+          ? Math.round(input.creditsCharged * 100) / 100
+          : null,
+      billedAt: this.asDateOrNull(input.billedAt),
+    };
+  }
+
+  private asDateOrNull(value: unknown): Date | null {
+    if (value instanceof Date) return value;
+    if (typeof value !== 'string') return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
   private toResource(snapshot: WritingDeskJobSnapshot): ActiveWritingDeskJobResource {
     return {
       jobId: snapshot.jobId,
@@ -187,6 +333,34 @@ export class WritingDeskJobsService {
       followUpAnswers: snapshot.followUpAnswers,
       notes: snapshot.notes ?? null,
       responseId: snapshot.responseId ?? null,
+      research: snapshot.research
+        ? {
+            status: snapshot.research.status,
+            startedAt: snapshot.research.startedAt?.toISOString?.() ?? null,
+            completedAt: snapshot.research.completedAt?.toISOString?.() ?? null,
+            updatedAt: snapshot.research.updatedAt?.toISOString?.() ?? null,
+            responseId: snapshot.research.responseId ?? null,
+            outputText: snapshot.research.outputText ?? null,
+            progress:
+              typeof snapshot.research.progress === 'number'
+                ? Math.max(0, Math.min(100, Math.round(snapshot.research.progress)))
+                : null,
+            activities: snapshot.research.activities.map((activity) => ({
+              id: activity.id,
+              type: activity.type,
+              label: activity.label,
+              status: activity.status,
+              createdAt: activity.createdAt?.toISOString?.() ?? new Date().toISOString(),
+              url: activity.url ?? null,
+            })),
+            error: snapshot.research.error ?? null,
+            creditsCharged:
+              typeof snapshot.research.creditsCharged === 'number'
+                ? Math.round(snapshot.research.creditsCharged * 100) / 100
+                : null,
+            billedAt: snapshot.research.billedAt?.toISOString?.() ?? null,
+          }
+        : null,
       createdAt: snapshot.createdAt?.toISOString?.() ?? new Date().toISOString(),
       updatedAt: snapshot.updatedAt?.toISOString?.() ?? new Date().toISOString(),
     };

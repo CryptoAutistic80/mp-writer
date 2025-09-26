@@ -33,6 +33,9 @@ export class WritingDeskJob {
 
   @Prop({ type: String, default: null })
   responseId!: string | null;
+
+  @Prop({ type: String, default: null })
+  researchStateCiphertext!: string | null;
 }
 
 export type WritingDeskJobDocument = WritingDeskJob & Document;
