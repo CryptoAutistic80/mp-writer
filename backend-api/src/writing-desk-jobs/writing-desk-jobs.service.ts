@@ -6,15 +6,22 @@ import {
   ActiveWritingDeskJobResource,
   WritingDeskJobSnapshot,
   WritingDeskJobFormSnapshot,
+  WritingDeskJobRecord,
 } from './writing-desk-jobs.types';
+import { EncryptionService } from '../crypto/encryption.service';
 
 @Injectable()
 export class WritingDeskJobsService {
-  constructor(private readonly repository: WritingDeskJobsRepository) {}
+  constructor(
+    private readonly repository: WritingDeskJobsRepository,
+    private readonly encryption: EncryptionService,
+  ) {}
 
   async getActiveJobForUser(userId: string): Promise<ActiveWritingDeskJobResource | null> {
-    const snapshot = await this.repository.findActiveByUserId(userId);
-    return snapshot ? this.toResource(snapshot) : null;
+    const record = await this.repository.findActiveByUserId(userId);
+    if (!record) return null;
+    const snapshot = this.toSnapshot(record);
+    return this.toResource(snapshot);
   }
 
   async upsertActiveJob(
@@ -24,28 +31,28 @@ export class WritingDeskJobsService {
     const existing = await this.repository.findActiveByUserId(userId);
     const sanitized = this.sanitiseInput(input);
     const nextJobId = this.resolveJobId(existing, input.jobId);
-    const payload: Omit<WritingDeskJobSnapshot, 'createdAt' | 'updatedAt'> = {
+    const payload = {
       jobId: nextJobId,
-      userId,
       phase: sanitized.phase,
       stepIndex: sanitized.stepIndex,
       followUpIndex: sanitized.followUpIndex,
-      form: sanitized.form,
       followUpQuestions: sanitized.followUpQuestions,
-      followUpAnswers: sanitized.followUpAnswers,
+      formCiphertext: this.encryption.encryptObject(sanitized.form),
+      followUpAnswersCiphertext: this.encryption.encryptObject(sanitized.followUpAnswers),
       notes: sanitized.notes,
       responseId: sanitized.responseId,
-    } as Omit<WritingDeskJobSnapshot, 'createdAt' | 'updatedAt'>;
+    };
 
     const saved = await this.repository.upsertActiveJob(userId, payload);
-    return this.toResource(saved);
+    const snapshot = this.toSnapshot(saved);
+    return this.toResource(snapshot);
   }
 
   async deleteActiveJob(userId: string): Promise<void> {
     await this.repository.deleteActiveJob(userId);
   }
 
-  private resolveJobId(existing: WritingDeskJobSnapshot | null, requestedJobId: string | undefined) {
+  private resolveJobId(existing: { jobId: string } | null, requestedJobId: string | undefined) {
     if (!existing) {
       return requestedJobId && this.isUuid(requestedJobId) ? requestedJobId : randomUUID();
     }
@@ -99,6 +106,74 @@ export class WritingDeskJobsService {
       notes: trimNullable(input.notes),
       responseId: trimNullable(input.responseId),
     };
+  }
+
+  private toSnapshot(record: WritingDeskJobRecord): WritingDeskJobSnapshot {
+    const form = this.decryptForm(record);
+    const followUpAnswers = this.decryptFollowUpAnswers(record);
+
+    const createdAt = record.createdAt instanceof Date ? record.createdAt : new Date(record.createdAt);
+    const updatedAt = record.updatedAt instanceof Date ? record.updatedAt : new Date(record.updatedAt);
+
+    return {
+      jobId: record.jobId,
+      userId: record.userId,
+      phase: record.phase,
+      stepIndex: record.stepIndex,
+      followUpIndex: record.followUpIndex,
+      form,
+      followUpQuestions: record.followUpQuestions ?? [],
+      followUpAnswers,
+      notes: record.notes ?? null,
+      responseId: record.responseId ?? null,
+      createdAt,
+      updatedAt,
+    };
+  }
+
+  private decryptForm(record: WritingDeskJobRecord): WritingDeskJobFormSnapshot {
+    if (record.formCiphertext) {
+      try {
+        return this.encryption.decryptObject<WritingDeskJobFormSnapshot>(record.formCiphertext);
+      } catch {
+        // fall through to legacy/plain handling
+      }
+    }
+
+    if (record.form) {
+      return {
+        issueDetail: record.form.issueDetail ?? '',
+        affectedDetail: record.form.affectedDetail ?? '',
+        backgroundDetail: record.form.backgroundDetail ?? '',
+        desiredOutcome: record.form.desiredOutcome ?? '',
+      };
+    }
+
+    return {
+      issueDetail: '',
+      affectedDetail: '',
+      backgroundDetail: '',
+      desiredOutcome: '',
+    };
+  }
+
+  private decryptFollowUpAnswers(record: WritingDeskJobRecord): string[] {
+    if (record.followUpAnswersCiphertext) {
+      try {
+        const decrypted = this.encryption.decryptObject<string[]>(record.followUpAnswersCiphertext);
+        if (Array.isArray(decrypted)) {
+          return decrypted.map((value) => (typeof value === 'string' ? value : ''));
+        }
+      } catch {
+        // fall through to legacy/plain handling
+      }
+    }
+
+    if (Array.isArray(record.followUpAnswers)) {
+      return record.followUpAnswers.map((value) => (typeof value === 'string' ? value : ''));
+    }
+
+    return [];
   }
 
   private toResource(snapshot: WritingDeskJobSnapshot): ActiveWritingDeskJobResource {

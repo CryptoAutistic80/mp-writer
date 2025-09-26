@@ -19,29 +19,14 @@ export class WritingDeskJob {
   @Prop({ type: Number, required: true, min: 0 })
   followUpIndex!: number;
 
-  @Prop({
-    type: {
-      issueDetail: { type: String, default: '' },
-      affectedDetail: { type: String, default: '' },
-      backgroundDetail: { type: String, default: '' },
-      desiredOutcome: { type: String, default: '' },
-    },
-    required: true,
-    _id: false,
-    default: {},
-  })
-  form!: {
-    issueDetail: string;
-    affectedDetail: string;
-    backgroundDetail: string;
-    desiredOutcome: string;
-  };
+  @Prop({ type: String, required: true })
+  formCiphertext!: string;
 
   @Prop({ type: [String], default: [] })
   followUpQuestions!: string[];
 
-  @Prop({ type: [String], default: [] })
-  followUpAnswers!: string[];
+  @Prop({ type: String, required: true })
+  followUpAnswersCiphertext!: string;
 
   @Prop({ type: String, default: null })
   notes!: string | null;

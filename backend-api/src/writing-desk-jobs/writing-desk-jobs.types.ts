@@ -24,6 +24,23 @@ export interface WritingDeskJobSnapshot {
   updatedAt: Date;
 }
 
+export interface WritingDeskJobRecord {
+  jobId: string;
+  userId: string;
+  phase: WritingDeskJobPhase;
+  stepIndex: number;
+  followUpIndex: number;
+  followUpQuestions: string[];
+  formCiphertext?: string;
+  followUpAnswersCiphertext?: string;
+  form?: WritingDeskJobFormSnapshot;
+  followUpAnswers?: string[];
+  notes: string | null;
+  responseId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface ActiveWritingDeskJobResource {
   jobId: string;
   phase: WritingDeskJobPhase;
