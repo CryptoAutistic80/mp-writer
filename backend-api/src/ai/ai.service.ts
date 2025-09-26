@@ -13,6 +13,7 @@ import {
 
 const FOLLOW_UP_CREDIT_COST = 0.1;
 const RESEARCH_CREDIT_COST = 0.7;
+const ALLOWED_WEB_SEARCH_CONTEXT_SIZES = new Set(['shallow', 'medium', 'deep']);
 
 @Injectable()
 export class AiService {
@@ -228,6 +229,12 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
     const apiKey = this.config.get<string>('OPENAI_API_KEY');
     const model = this.config.get<string>('OPENAI_DEEP_RESEARCH_MODEL')?.trim() || 'o4-mini-deep-research';
     const vectorStoreEnv = this.config.get<string>('OPENAI_DEEP_RESEARCH_VECTOR_STORE_IDS') ?? '';
+    const contextSizeRaw = this.config.get<string>('OPENAI_DEEP_RESEARCH_WEB_SEARCH_CONTEXT_SIZE');
+    const normalisedContextSize =
+      typeof contextSizeRaw === 'string' ? contextSizeRaw.trim().toLowerCase() : '';
+    const webSearchTool = ALLOWED_WEB_SEARCH_CONTEXT_SIZES.has(normalisedContextSize)
+      ? { type: 'web_search_preview', web_search_context_size: normalisedContextSize }
+      : { type: 'web_search_preview' };
     const vectorStoreIds = vectorStoreEnv
       .split(',')
       .map((value) => value.trim())
@@ -290,7 +297,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
 
     try {
       const client = await this.getOpenAiClient(apiKey);
-      const tools: any[] = [{ type: 'web_search_preview' }];
+      const tools: Array<Record<string, unknown>> = [webSearchTool];
       if (vectorStoreIds.length > 0) {
         tools.push({ type: 'file_search', vector_store_ids: vectorStoreIds });
       }

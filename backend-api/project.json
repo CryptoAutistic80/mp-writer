@@ -17,6 +17,13 @@
         }
       }
     },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/backend-api"],
+      "options": {
+        "jestConfig": "backend-api/jest.config.js"
+      }
+    },
     "prune-lockfile": {
       "dependsOn": ["build"],
       "cache": true,
