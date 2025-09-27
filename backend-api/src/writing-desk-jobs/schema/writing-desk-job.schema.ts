@@ -1,6 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
-import { WRITING_DESK_JOB_PHASES, WritingDeskJobPhase } from '../writing-desk-jobs.types';
+import {
+  WRITING_DESK_JOB_PHASES,
+  WRITING_DESK_RESEARCH_STATUSES,
+  WritingDeskJobPhase,
+  WritingDeskResearchStatus,
+} from '../writing-desk-jobs.types';
 
 @Schema({ timestamps: true })
 export class WritingDeskJob {
@@ -33,6 +38,51 @@ export class WritingDeskJob {
 
   @Prop({ type: String, default: null })
   responseId!: string | null;
+
+  @Prop({ type: String, enum: WRITING_DESK_RESEARCH_STATUSES, default: 'idle' })
+  researchStatus!: WritingDeskResearchStatus;
+
+  @Prop({ type: Number, default: 0, min: 0, max: 100 })
+  researchProgress!: number;
+
+  @Prop({
+    type: [
+      {
+        id: { type: String, required: true },
+        type: { type: String, required: true },
+        message: { type: String, required: true },
+        createdAt: { type: Date, required: true },
+      },
+    ],
+    default: [],
+  })
+  researchActions!: Array<{
+    id: string;
+    type: string;
+    message: string;
+    createdAt: Date;
+  }>;
+
+  @Prop({ type: String, default: null })
+  researchResult!: string | null;
+
+  @Prop({ type: String, default: null })
+  researchResponseId!: string | null;
+
+  @Prop({ type: String, default: null })
+  researchError!: string | null;
+
+  @Prop({ type: Date, default: null })
+  researchStartedAt!: Date | null;
+
+  @Prop({ type: Date, default: null })
+  researchCompletedAt!: Date | null;
+
+  @Prop({ type: Number, default: null })
+  researchBilledCredits!: number | null;
+
+  @Prop({ type: Number, default: 0 })
+  researchCursor!: number;
 }
 
 export type WritingDeskJobDocument = WritingDeskJob & Document;

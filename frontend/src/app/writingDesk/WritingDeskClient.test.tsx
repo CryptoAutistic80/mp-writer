@@ -35,6 +35,7 @@ describe('WritingDeskClient', () => {
   const originalFetch = global.fetch;
   const saveJobMock = jest.fn();
   const clearJobMock = jest.fn();
+  const refetchMock = jest.fn();
   const followUpQueue: FollowUpResponse[] = [];
   let fetchMock: jest.Mock<Promise<ResponseLike>, FetchArgs>;
 
@@ -102,11 +103,13 @@ describe('WritingDeskClient', () => {
   beforeEach(() => {
     saveJobMock.mockResolvedValue({ jobId: 'job-123' });
     clearJobMock.mockResolvedValue(undefined);
+    refetchMock.mockResolvedValue({ data: null } as any);
     followUpQueue.length = 0;
     setupFetchMock();
     mockUseActiveWritingDeskJob.mockReturnValue({
       activeJob: null,
       isLoading: false,
+      refetch: refetchMock as any,
       saveJob: saveJobMock,
       isSaving: false,
       clearJob: clearJobMock,

@@ -5,7 +5,19 @@ import ActiveJobResumeModal from '../../features/writing-desk/components/ActiveJ
 import EditIntakeConfirmModal from '../../features/writing-desk/components/EditIntakeConfirmModal';
 import StartOverConfirmModal from '../../features/writing-desk/components/StartOverConfirmModal';
 import { useActiveWritingDeskJob } from '../../features/writing-desk/hooks/useActiveWritingDeskJob';
-import { ActiveWritingDeskJob, UpsertActiveWritingDeskJobPayload } from '../../features/writing-desk/types';
+import ResearchActivityFeed from '../../features/writing-desk/components/ResearchActivityFeed';
+import ResearchProgressBar from '../../features/writing-desk/components/ResearchProgressBar';
+import {
+  ActiveWritingDeskJob,
+  UpsertActiveWritingDeskJobPayload,
+  WritingDeskResearchState,
+  WritingDeskResearchStatus,
+  WRITING_DESK_RESEARCH_STATUSES,
+} from '../../features/writing-desk/types';
+import {
+  fetchWritingDeskResearchStatus,
+  startWritingDeskResearch,
+} from '../../features/writing-desk/api/research';
 
 type StepKey = 'issueDetail' | 'affectedDetail' | 'backgroundDetail' | 'desiredOutcome';
 
@@ -50,9 +62,23 @@ const initialFormState: FormState = {
   desiredOutcome: '',
 };
 
+const defaultResearchState: WritingDeskResearchState = {
+  status: 'idle',
+  progress: 0,
+  actions: [],
+  result: null,
+  responseId: null,
+  error: null,
+  startedAt: null,
+  completedAt: null,
+  billedCredits: null,
+};
+
+const FINAL_RESEARCH_STATUSES: WritingDeskResearchStatus[] = ['completed', 'failed', 'cancelled'];
+
 export default function WritingDeskClient() {
   const [form, setForm] = useState<FormState>(initialFormState);
-  const [phase, setPhase] = useState<'initial' | 'generating' | 'followup' | 'summary'>('initial');
+  const [phase, setPhase] = useState<'initial' | 'generating' | 'followup' | 'summary' | 'research'>('initial');
   const [stepIndex, setStepIndex] = useState(0);
   const [followUpIndex, setFollowUpIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -82,9 +108,57 @@ export default function WritingDeskClient() {
   const [jobSaveError, setJobSaveError] = useState<string | null>(null);
   const [editIntakeModalOpen, setEditIntakeModalOpen] = useState(false);
   const [startOverConfirmOpen, setStartOverConfirmOpen] = useState(false);
+  const [research, setResearch] = useState<WritingDeskResearchState>(defaultResearchState);
+  const [researchStarting, setResearchStarting] = useState(false);
 
   const currentStep = phase === 'initial' ? steps[stepIndex] ?? null : null;
+  const normaliseResearch = useCallback(
+    (value?: WritingDeskResearchState | null): WritingDeskResearchState => {
+      if (!value) return { ...defaultResearchState };
+      const status = WRITING_DESK_RESEARCH_STATUSES.includes(value.status)
+        ? value.status
+        : 'idle';
+      const progress = Number.isFinite(value.progress)
+        ? Math.min(100, Math.max(0, value.progress))
+        : 0;
+      const actions = Array.isArray(value.actions)
+        ? value.actions
+            .map((action, index) => {
+              const createdAt = typeof action?.createdAt === 'string' && action.createdAt
+                ? action.createdAt
+                : new Date().toISOString();
+              const message = typeof action?.message === 'string' ? action.message : '';
+              if (!message.trim()) return null;
+              return {
+                id:
+                  typeof action?.id === 'string' && action.id
+                    ? action.id
+                    : `activity-${index}`,
+                type: typeof action?.type === 'string' && action.type ? action.type : 'activity',
+                message,
+                createdAt,
+              };
+            })
+            .filter((action): action is WritingDeskResearchState['actions'][number] => Boolean(action))
+            .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+        : [];
+
+      return {
+        status,
+        progress,
+        actions,
+        result: value.result ?? null,
+        responseId: value.responseId ?? null,
+        error: value.error ?? null,
+        startedAt: value.startedAt ?? null,
+        completedAt: value.completedAt ?? null,
+        billedCredits: typeof value.billedCredits === 'number' ? value.billedCredits : null,
+      };
+    },
+    [],
+  );
   const followUpCreditCost = 0.1;
+  const researchCreditCost = 0.7;
   const formatCredits = (value: number) => {
     const rounded = Math.round(value * 100) / 100;
     return rounded.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
@@ -104,19 +178,24 @@ export default function WritingDeskClient() {
   }, []);
 
   const totalFollowUpSteps = followUps.length > 0 ? followUps.length : 1;
-  const totalSteps = steps.length + totalFollowUpSteps;
+  const totalSteps = steps.length + totalFollowUpSteps + 1;
   const currentStepNumber = useMemo(() => {
     if (phase === 'initial') return stepIndex + 1;
     if (phase === 'generating') return steps.length;
     if (phase === 'followup') return steps.length + followUpIndex + 1;
+    if (phase === 'research') return steps.length + totalFollowUpSteps + 1;
     return steps.length + totalFollowUpSteps;
   }, [phase, stepIndex, followUpIndex, totalFollowUpSteps]);
   const completedSteps = useMemo(() => {
     if (phase === 'initial') return stepIndex;
     if (phase === 'generating') return steps.length;
     if (phase === 'followup') return steps.length + followUpIndex;
+    if (phase === 'research') {
+      const base = steps.length + totalFollowUpSteps;
+      return FINAL_RESEARCH_STATUSES.includes(research.status) ? base + 1 : base;
+    }
     return steps.length + totalFollowUpSteps;
-  }, [phase, stepIndex, followUpIndex, totalFollowUpSteps]);
+  }, [phase, stepIndex, followUpIndex, totalFollowUpSteps, research.status]);
   const progress = useMemo(() => (completedSteps / totalSteps) * 100, [completedSteps, totalSteps]);
   const isGeneratingFollowUps = phase === 'generating';
   const creditState = useMemo<'loading' | 'low' | 'ok'>(() => {
@@ -134,6 +213,7 @@ export default function WritingDeskClient() {
     availableCredits === null
       ? 'Checking available credits'
       : `You have ${formatCredits(availableCredits)} credits available`;
+  const isResearchFinal = FINAL_RESEARCH_STATUSES.includes(research.status);
 
   useEffect(() => {
     if (!isGeneratingFollowUps) {
@@ -181,6 +261,8 @@ export default function WritingDeskClient() {
     setServerError(null);
     setLoading(false);
     resetFollowUps();
+    setResearch({ ...defaultResearchState });
+    setResearchStarting(false);
   }, [resetFollowUps]);
 
   const applySnapshot = useCallback(
@@ -202,12 +284,14 @@ export default function WritingDeskClient() {
       setFollowUpIndex(nextFollowUpIndex);
       setNotes(job.notes ?? null);
       setResponseId(job.responseId ?? null);
+      setResearch(normaliseResearch(job.research));
       setError(null);
       setServerError(null);
       setLoading(false);
       setJobSaveError(null);
+      setResearchStarting(false);
     },
-    [resetFollowUps],
+    [normaliseResearch, resetFollowUps],
   );
 
   const resourceToPayload = useCallback(
@@ -226,8 +310,9 @@ export default function WritingDeskClient() {
       followUpAnswers: Array.isArray(job.followUpAnswers) ? [...job.followUpAnswers] : [],
       notes: job.notes ?? null,
       responseId: job.responseId ?? null,
+      research: normaliseResearch(job.research),
     }),
-    [],
+    [normaliseResearch],
   );
 
   const buildSnapshotPayload = useCallback(
@@ -241,8 +326,9 @@ export default function WritingDeskClient() {
       followUpAnswers: [...followUpAnswers],
       notes: notes ?? null,
       responseId: responseId ?? null,
+      research: normaliseResearch(research),
     }),
-    [followUpAnswers, followUpIndex, followUps, form, jobId, notes, phase, responseId, stepIndex],
+    [followUpAnswers, followUpIndex, followUps, form, jobId, normaliseResearch, notes, phase, research, responseId, stepIndex],
   );
 
   const signatureForPayload = useCallback(
@@ -311,6 +397,7 @@ export default function WritingDeskClient() {
 
   useEffect(() => {
     if (!persistenceEnabled) return;
+    if (phase === 'research') return;
     if (isSavingJob) return;
     const signature = signatureForPayload(currentSnapshot, jobId);
     if (lastPersistedRef.current === signature) return;
@@ -330,7 +417,41 @@ export default function WritingDeskClient() {
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [currentSnapshot, isSavingJob, jobId, persistenceEnabled, saveJob, signatureForPayload]);
+  }, [currentSnapshot, isSavingJob, jobId, persistenceEnabled, phase, saveJob, signatureForPayload]);
+
+  useEffect(() => {
+    if (phase !== 'research') return;
+    if (FINAL_RESEARCH_STATUSES.includes(research.status)) return;
+
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const poll = async () => {
+      try {
+        const job = await fetchWritingDeskResearchStatus();
+        if (cancelled || !job) return;
+        applySnapshot(job);
+        setJobId(job.jobId);
+        setResearch(normaliseResearch(job.research));
+        lastPersistedRef.current = signatureForPayload(resourceToPayload(job), job.jobId);
+        const status = job.research?.status ?? 'idle';
+        if (!FINAL_RESEARCH_STATUSES.includes(status)) {
+          timer = window.setTimeout(poll, 5000);
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        setServerError(err?.message || 'We could not refresh the research status. We will keep trying.');
+        timer = window.setTimeout(poll, 8000);
+      }
+    };
+
+    poll();
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [applySnapshot, normaliseResearch, phase, research.status, resourceToPayload, signatureForPayload]);
 
   const handleInitialChange = (value: string) => {
     if (!currentStep) return;
@@ -380,6 +501,7 @@ export default function WritingDeskClient() {
       setNotes(resolvedNotes);
       setResponseId(resolvedResponseId);
       setPhase('summary');
+      setResearch({ ...defaultResearchState });
       setPersistenceEnabled(true);
 
       const payload: UpsertActiveWritingDeskJobPayload = {
@@ -504,6 +626,35 @@ export default function WritingDeskClient() {
     },
     [availableCredits, followUpCreditCost, form, refreshCredits, submitBundle],
   );
+
+  const handleStartResearch = useCallback(async () => {
+    setError(null);
+    setServerError(null);
+    setResearchStarting(true);
+    setLoading(true);
+    try {
+      const { job, remainingCredits } = await startWritingDeskResearch();
+      applySnapshot(job);
+      setJobId(job.jobId);
+      setResearch(normaliseResearch(job.research));
+      setPersistenceEnabled(false);
+      if (typeof remainingCredits === 'number') {
+        setAvailableCredits(Math.round(remainingCredits * 100) / 100);
+      } else {
+        const latestCredits = await refreshCredits();
+        if (typeof latestCredits === 'number') {
+          setAvailableCredits(latestCredits);
+        }
+      }
+      lastPersistedRef.current = signatureForPayload(resourceToPayload(job), job.jobId);
+    } catch (err: any) {
+      setServerError(err?.message || 'We could not start research. Please try again.');
+      setPhase('summary');
+    } finally {
+      setResearchStarting(false);
+      setLoading(false);
+    }
+  }, [applySnapshot, normaliseResearch, refreshCredits, resourceToPayload, signatureForPayload]);
 
   const handleInitialNext = async () => {
     if (!currentStep) return;
@@ -961,9 +1112,122 @@ export default function WritingDeskClient() {
                   Review follow-up answers
                 </button>
               )}
-              <button type="button" className="btn-primary" disabled={loading}>
-                Create my letter
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  void handleStartResearch();
+                }}
+                disabled={
+                  loading
+                  || researchStarting
+                  || (availableCredits !== null && availableCredits < researchCreditCost)
+                }
+              >
+                {researchStarting ? 'Starting research…' : `Create my letter (costs ${formatCredits(researchCreditCost)} credits)`}
               </button>
+            </div>
+            {availableCredits !== null
+              && availableCredits < researchCreditCost && (
+              <div className="status" aria-live="polite" style={{ marginTop: 8 }}>
+                <p style={{ color: '#2563eb' }}>
+                  Starting deep research costs {formatCredits(researchCreditCost)} credits. Please top up to continue.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {phase === 'research' && (
+          <div className="result" aria-live="polite">
+            <h3 className="section-title" style={{ fontSize: '1.25rem' }}>
+              {isResearchFinal ? 'Research complete' : 'Research in progress'}
+            </h3>
+            <p className="section-sub">
+              {isResearchFinal
+                ? 'Here are the raw findings we gathered to help you draft a fully referenced letter.'
+                : 'We’re gathering evidence, statistics, and citations to support your letter. This can take a few minutes.'}
+            </p>
+
+            {serverError && (
+              <div className="status" aria-live="assertive" style={{ marginTop: 12 }}>
+                <p style={{ color: '#b91c1c' }}>{serverError}</p>
+              </div>
+            )}
+
+            <div className="card" style={{ padding: 16, marginTop: 16 }}>
+              <ResearchProgressBar progress={research.progress} status={research.status} />
+              <div style={{ marginTop: 16 }}>
+                <ResearchActivityFeed actions={research.actions} />
+              </div>
+            </div>
+
+            {isResearchFinal && (
+              <div className="card" style={{ padding: 16, marginTop: 16 }}>
+                <h4 className="section-title" style={{ fontSize: '1rem' }}>Raw research notes</h4>
+                {research.status === 'failed' ? (
+                  <p style={{ color: '#b91c1c', marginTop: 12 }}>
+                    {research.error || 'The research request failed. You can adjust your details and try again.'}
+                  </p>
+                ) : research.result ? (
+                  <pre
+                    style={{
+                      marginTop: 12,
+                      whiteSpace: 'pre-wrap',
+                      fontFamily: 'inherit',
+                      fontSize: '0.95rem',
+                    }}
+                  >
+                    {research.result}
+                  </pre>
+                ) : (
+                  <p style={{ marginTop: 12 }}>Research completed, but no findings were returned.</p>
+                )}
+                {research.status === 'failed' && research.result && (
+                  <pre
+                    style={{
+                      marginTop: 12,
+                      whiteSpace: 'pre-wrap',
+                      fontFamily: 'inherit',
+                      fontSize: '0.95rem',
+                    }}
+                  >
+                    {research.result}
+                  </pre>
+                )}
+              </div>
+            )}
+
+            <div
+              className="actions"
+              style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}
+            >
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setStartOverConfirmOpen(true)}
+                disabled={loading || researchStarting}
+              >
+                Start again
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setEditIntakeModalOpen(true)}
+                disabled={loading || researchStarting}
+              >
+                Edit intake answers
+              </button>
+              {followUps.length > 0 && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => handleEditFollowUpQuestion(0)}
+                  disabled={loading || researchStarting}
+                >
+                  Review follow-up answers
+                </button>
+              )}
             </div>
           </div>
         )}

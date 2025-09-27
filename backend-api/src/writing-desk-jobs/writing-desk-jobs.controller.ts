@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { WritingDeskJobsService } from './writing-desk-jobs.service';
 import { UpsertActiveWritingDeskJobDto } from './dto/upsert-active-writing-desk-job.dto';
@@ -16,6 +16,16 @@ export class WritingDeskJobsController {
   @Put()
   async upsertActiveJob(@Req() req: any, @Body() body: UpsertActiveWritingDeskJobDto) {
     return this.jobs.upsertActiveJob(req.user.id, body);
+  }
+
+  @Post('research/start')
+  async startResearch(@Req() req: any) {
+    return this.jobs.startResearch(req.user.id);
+  }
+
+  @Get('research/status')
+  async getResearchStatus(@Req() req: any) {
+    return this.jobs.refreshResearchStatus(req.user.id);
   }
 
   @Delete()
