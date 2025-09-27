@@ -5,7 +5,12 @@ import ActiveJobResumeModal from '../../features/writing-desk/components/ActiveJ
 import EditIntakeConfirmModal from '../../features/writing-desk/components/EditIntakeConfirmModal';
 import StartOverConfirmModal from '../../features/writing-desk/components/StartOverConfirmModal';
 import { useActiveWritingDeskJob } from '../../features/writing-desk/hooks/useActiveWritingDeskJob';
-import { ActiveWritingDeskJob, UpsertActiveWritingDeskJobPayload } from '../../features/writing-desk/types';
+import {
+  ActiveWritingDeskJob,
+  UpsertActiveWritingDeskJobPayload,
+  WritingDeskResearchState,
+  WritingDeskResearchActivity,
+} from '../../features/writing-desk/types';
 
 type StepKey = 'issueDetail' | 'affectedDetail' | 'backgroundDetail' | 'desiredOutcome';
 
@@ -52,7 +57,7 @@ const initialFormState: FormState = {
 
 export default function WritingDeskClient() {
   const [form, setForm] = useState<FormState>(initialFormState);
-  const [phase, setPhase] = useState<'initial' | 'generating' | 'followup' | 'summary'>('initial');
+  const [phase, setPhase] = useState<'initial' | 'generating' | 'followup' | 'summary' | 'research'>('initial');
   const [stepIndex, setStepIndex] = useState(0);
   const [followUpIndex, setFollowUpIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +67,9 @@ export default function WritingDeskClient() {
   const [followUpAnswers, setFollowUpAnswers] = useState<string[]>([]);
   const [notes, setNotes] = useState<string | null>(null);
   const [responseId, setResponseId] = useState<string | null>(null);
+  const [research, setResearch] = useState<WritingDeskResearchState | null>(null);
+  const [researchPolling, setResearchPolling] = useState(false);
+  const [researchError, setResearchError] = useState<string | null>(null);
   const [ellipsisCount, setEllipsisCount] = useState(0);
   const [availableCredits, setAvailableCredits] = useState<number | null>(null);
   const {
@@ -104,20 +112,39 @@ export default function WritingDeskClient() {
   }, []);
 
   const totalFollowUpSteps = followUps.length > 0 ? followUps.length : 1;
-  const totalSteps = steps.length + totalFollowUpSteps;
+  const includeResearchStep = useMemo(() => research !== null || phase === 'research', [research, phase]);
+  const researchStepCompleted = useMemo(() => {
+    if (!research) return false;
+    return ['completed'].includes(research.status);
+  }, [research]);
+  const totalSteps = steps.length + totalFollowUpSteps + (includeResearchStep ? 1 : 0);
   const currentStepNumber = useMemo(() => {
     if (phase === 'initial') return stepIndex + 1;
     if (phase === 'generating') return steps.length;
     if (phase === 'followup') return steps.length + followUpIndex + 1;
-    return steps.length + totalFollowUpSteps;
-  }, [phase, stepIndex, followUpIndex, totalFollowUpSteps]);
+    if (phase === 'research') {
+      return steps.length + totalFollowUpSteps + 1;
+    }
+    return steps.length + totalFollowUpSteps + (includeResearchStep && researchStepCompleted ? 1 : 0);
+  }, [phase, stepIndex, followUpIndex, totalFollowUpSteps, includeResearchStep, researchStepCompleted]);
   const completedSteps = useMemo(() => {
     if (phase === 'initial') return stepIndex;
     if (phase === 'generating') return steps.length;
     if (phase === 'followup') return steps.length + followUpIndex;
-    return steps.length + totalFollowUpSteps;
-  }, [phase, stepIndex, followUpIndex, totalFollowUpSteps]);
-  const progress = useMemo(() => (completedSteps / totalSteps) * 100, [completedSteps, totalSteps]);
+    if (phase === 'research') {
+      return steps.length + totalFollowUpSteps + (researchStepCompleted ? 1 : 0);
+    }
+    return steps.length + totalFollowUpSteps + (includeResearchStep && researchStepCompleted ? 1 : 0);
+  }, [phase, stepIndex, followUpIndex, totalFollowUpSteps, includeResearchStep, researchStepCompleted]);
+  const progress = useMemo(() => {
+    if (totalSteps === 0) return 0;
+    if (phase === 'research' && research?.progress !== null && typeof research?.progress === 'number') {
+      const base = (steps.length + totalFollowUpSteps) / totalSteps;
+      const researchFraction = 1 / totalSteps;
+      return Math.min(100, Math.max(0, (completedSteps / totalSteps) * 100 + research.progress * researchFraction));
+    }
+    return (completedSteps / totalSteps) * 100;
+  }, [completedSteps, totalSteps, phase, research?.progress, steps.length, totalFollowUpSteps]);
   const isGeneratingFollowUps = phase === 'generating';
   const creditState = useMemo<'loading' | 'low' | 'ok'>(() => {
     if (availableCredits === null) return 'loading';
@@ -181,6 +208,9 @@ export default function WritingDeskClient() {
     setServerError(null);
     setLoading(false);
     resetFollowUps();
+    setResearch(null);
+    setResearchError(null);
+    setResearchPolling(false);
   }, [resetFollowUps]);
 
   const applySnapshot = useCallback(
@@ -202,6 +232,9 @@ export default function WritingDeskClient() {
       setFollowUpIndex(nextFollowUpIndex);
       setNotes(job.notes ?? null);
       setResponseId(job.responseId ?? null);
+      setResearch(job.research ?? null);
+      setResearchError(null);
+      setResearchPolling(false);
       setError(null);
       setServerError(null);
       setLoading(false);
@@ -226,6 +259,7 @@ export default function WritingDeskClient() {
       followUpAnswers: Array.isArray(job.followUpAnswers) ? [...job.followUpAnswers] : [],
       notes: job.notes ?? null,
       responseId: job.responseId ?? null,
+      research: job.research ?? null,
     }),
     [],
   );
@@ -241,8 +275,9 @@ export default function WritingDeskClient() {
       followUpAnswers: [...followUpAnswers],
       notes: notes ?? null,
       responseId: responseId ?? null,
+      research: research ?? null,
     }),
-    [followUpAnswers, followUpIndex, followUps, form, jobId, notes, phase, responseId, stepIndex],
+    [followUpAnswers, followUpIndex, followUps, form, jobId, notes, phase, research, responseId, stepIndex],
   );
 
   const signatureForPayload = useCallback(
@@ -252,6 +287,18 @@ export default function WritingDeskClient() {
         jobId: resolvedJobId ?? payload.jobId ?? null,
       }),
     [],
+  );
+
+  const updateFromJob = useCallback(
+    (job: ActiveWritingDeskJob) => {
+      applySnapshot(job);
+      setJobId(job.jobId);
+      const payload = resourceToPayload(job);
+      lastPersistedRef.current = signatureForPayload(payload, job.jobId);
+      setPersistenceEnabled(true);
+      setJobSaveError(null);
+    },
+    [applySnapshot, resourceToPayload, signatureForPayload],
   );
 
   useEffect(() => {
@@ -280,16 +327,11 @@ export default function WritingDeskClient() {
 
   const handleResumeExistingJob = useCallback(() => {
     if (!pendingJob) return;
-    applySnapshot(pendingJob);
-    setJobId(pendingJob.jobId);
-    const payload = resourceToPayload(pendingJob);
-    lastPersistedRef.current = signatureForPayload(payload, pendingJob.jobId);
+    updateFromJob(pendingJob);
     setResumeModalOpen(false);
     setPendingJob(null);
     setHasHandledInitialJob(true);
-    setPersistenceEnabled(true);
-    setJobSaveError(null);
-  }, [applySnapshot, pendingJob, resourceToPayload, signatureForPayload]);
+  }, [pendingJob, updateFromJob]);
 
   const handleDiscardExistingJob = useCallback(async () => {
     setJobSaveError(null);
@@ -331,6 +373,64 @@ export default function WritingDeskClient() {
       window.clearTimeout(timeout);
     };
   }, [currentSnapshot, isSavingJob, jobId, persistenceEnabled, saveJob, signatureForPayload]);
+
+  useEffect(() => {
+    if (phase !== 'research') return;
+    if (!jobId) return;
+    if (!research || !research.responseId) return;
+    if (['completed', 'failed', 'cancelled'].includes(research.status)) return;
+
+    let cancelled = false;
+    let timeout: ReturnType<typeof window.setTimeout> | null = null;
+
+    const poll = async () => {
+      if (cancelled) return;
+      setResearchPolling(true);
+      try {
+        const res = await fetch(`/api/ai/writing-desk/research/${jobId}`, {
+          method: 'GET',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(text || `Request failed (${res.status})`);
+        }
+        const json = await res.json();
+        const candidate = (json?.job ?? json) as Partial<ActiveWritingDeskJob> | null;
+        const hasValidJobId =
+          candidate && typeof candidate === 'object' && typeof candidate.jobId === 'string' && candidate.jobId.length > 0;
+        if (hasValidJobId) {
+          updateFromJob(candidate as ActiveWritingDeskJob);
+        }
+        const nextStatus =
+          (hasValidJobId && candidate?.research?.status ? candidate.research.status : research.status) ?? research.status;
+        if (!cancelled && !['completed', 'failed', 'cancelled'].includes(nextStatus ?? '')) {
+          timeout = window.setTimeout(poll, 5000);
+        }
+        if (hasValidJobId && candidate?.research?.error) {
+          setResearchError(candidate.research.error);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setResearchError(err?.message || 'Unable to refresh research status.');
+        }
+      } finally {
+        if (!cancelled) {
+          setResearchPolling(false);
+        }
+      }
+    };
+
+    void poll();
+
+    return () => {
+      cancelled = true;
+      if (timeout) {
+        window.clearTimeout(timeout);
+      }
+    };
+  }, [jobId, phase, research, updateFromJob]);
 
   const handleInitialChange = (value: string) => {
     if (!currentStep) return;
@@ -381,6 +481,9 @@ export default function WritingDeskClient() {
       setResponseId(resolvedResponseId);
       setPhase('summary');
       setPersistenceEnabled(true);
+      setResearch(null);
+      setResearchError(null);
+      setResearchPolling(false);
 
       const payload: UpsertActiveWritingDeskJobPayload = {
         jobId: jobId ?? undefined,
@@ -392,6 +495,7 @@ export default function WritingDeskClient() {
         followUpAnswers: trimmedAnswers,
         notes: resolvedNotes,
         responseId: resolvedResponseId,
+        research: null,
       };
 
       try {
@@ -415,6 +519,9 @@ export default function WritingDeskClient() {
       setError(null);
       setServerError(null);
       setLoading(true);
+      setResearch(null);
+      setResearchError(null);
+      setResearchPolling(false);
 
       let currentCredits = availableCredits;
       const refreshedCredits = await refreshCredits();
@@ -627,6 +734,160 @@ export default function WritingDeskClient() {
   const handleRegenerateFollowUps = useCallback(() => {
     void generateFollowUps('summary');
   }, [generateFollowUps]);
+
+  const handleStartResearch = useCallback(async () => {
+    if (loading) return;
+    const unanswered = followUps.some((_, idx) => !(followUpAnswers[idx]?.trim?.()));
+    if (unanswered) {
+      setServerError('Please answer all follow-up questions before continuing.');
+      return;
+    }
+
+    setServerError(null);
+    setResearchError(null);
+    setResearchPolling(false);
+    setLoading(true);
+
+    try {
+      const payload = {
+        jobId: jobId ?? undefined,
+        issueDetail: form.issueDetail.trim(),
+        affectedDetail: form.affectedDetail.trim(),
+        backgroundDetail: form.backgroundDetail.trim(),
+        desiredOutcome: form.desiredOutcome.trim(),
+        followUpQuestions: followUps.map((value) => value?.toString?.().trim?.() ?? ''),
+        followUpAnswers: followUpAnswers.map((value) => value?.toString?.().trim?.() ?? ''),
+        notes: notes ?? undefined,
+        responseId: responseId ?? undefined,
+      };
+
+      const res = await fetch('/api/ai/writing-desk/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text || `Request failed (${res.status})`);
+      }
+
+      const json = await res.json();
+      if (json?.job) {
+        updateFromJob(json.job as ActiveWritingDeskJob);
+      }
+      if (typeof json?.remainingCredits === 'number') {
+        setAvailableCredits(Math.round(json.remainingCredits * 100) / 100);
+      } else {
+        const latestCredits = await refreshCredits();
+        if (typeof latestCredits === 'number') {
+          setAvailableCredits(latestCredits);
+        }
+      }
+      setPhase('research');
+    } catch (err: any) {
+      setServerError(err?.message || 'Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [followUpAnswers, followUps, form, jobId, loading, notes, refreshCredits, responseId, updateFromJob]);
+
+  const summaryCards = (
+    <>
+      <div className="card" style={{ padding: 16, marginTop: 16 }}>
+        <h4 className="section-title" style={{ fontSize: '1rem' }}>What you told us</h4>
+        <div className="stack" style={{ marginTop: 12 }}>
+          {steps.map((step) => (
+            <div key={step.key} style={{ marginBottom: 16 }}>
+              <div>
+                <h5 style={{ margin: 0, fontWeight: 600, fontSize: '1rem' }}>{step.title}</h5>
+              </div>
+              <p style={{ margin: '6px 0 0 0' }}>{form[step.key]}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: 16, marginTop: 16 }}>
+        <h4 className="section-title" style={{ fontSize: '1rem' }}>Follow-up questions</h4>
+        {followUps.length > 0 ? (
+          <ol style={{ marginTop: 8, paddingLeft: 20 }}>
+            {followUps.map((q, idx) => (
+              <li key={idx} style={{ marginBottom: 12 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    gap: 12,
+                  }}
+                >
+                  <p style={{ marginBottom: 4 }}>{q}</p>
+                  <button
+                    type="button"
+                    className="btn-link"
+                    onClick={() => handleEditFollowUpQuestion(idx)}
+                    aria-label={`Edit answer for follow-up question ${idx + 1}`}
+                    disabled={loading}
+                  >
+                    Edit answer
+                  </button>
+                </div>
+                <p style={{ margin: 0, fontWeight: 600 }}>Your answer:</p>
+                <p style={{ margin: '4px 0 0 0' }}>{followUpAnswers[idx]}</p>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p style={{ marginTop: 8 }}>No additional questions needed — we have enough detail for the next step.</p>
+        )}
+        {followUps.length > 0 && (
+          <div className="actions" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="btn-link"
+              onClick={handleRegenerateFollowUps}
+              disabled={loading}
+            >
+              Ask for new follow-up questions (costs {formatCredits(followUpCreditCost)} credits)
+            </button>
+          </div>
+        )}
+        {notes && <p style={{ marginTop: 8, fontStyle: 'italic' }}>{notes}</p>}
+        {responseId && (
+          <p style={{ marginTop: 12, fontSize: '0.85rem', color: '#6b7280' }}>Reference ID: {responseId}</p>
+        )}
+      </div>
+    </>
+  );
+
+  const researchProgressValue = useMemo(() => {
+    if (typeof research?.progress === 'number' && !Number.isNaN(research.progress)) {
+      return Math.max(0, Math.min(100, research.progress));
+    }
+    if (research && ['completed'].includes(research.status)) return 100;
+    return research ? 0 : null;
+  }, [research]);
+
+  const researchStatusLabel = useMemo(() => {
+    if (!research) return 'Preparing research…';
+    if (research.status === 'completed') return 'Research ready';
+    if (research.status === 'failed') return 'Research failed';
+    if (research.status === 'cancelled') return 'Research cancelled';
+    if (research.status === 'cancelling') return 'Research cancelling…';
+    if (research.status === 'requires_action') return 'Research needs attention';
+    return researchPolling ? 'Research in progress (updating…)' : 'Research in progress';
+  }, [research, researchPolling]);
+
+  const sortedResearchActivities = useMemo(() => {
+    if (!research?.activities) return [] as WritingDeskResearchActivity[];
+    return [...research.activities].sort((a, b) => {
+      const aTime = new Date(a.createdAt).getTime();
+      const bTime = new Date(b.createdAt).getTime();
+      return aTime - bTime;
+    });
+  }, [research?.activities]);
 
   return (
     <>
@@ -866,70 +1127,7 @@ export default function WritingDeskClient() {
               </div>
             )}
 
-            <div className="card" style={{ padding: 16, marginTop: 16 }}>
-              <h4 className="section-title" style={{ fontSize: '1rem' }}>What you told us</h4>
-              <div className="stack" style={{ marginTop: 12 }}>
-                {steps.map((step) => (
-                  <div key={step.key} style={{ marginBottom: 16 }}>
-                    <div>
-                      <h5 style={{ margin: 0, fontWeight: 600, fontSize: '1rem' }}>{step.title}</h5>
-                    </div>
-                    <p style={{ margin: '6px 0 0 0' }}>{form[step.key]}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="card" style={{ padding: 16, marginTop: 16 }}>
-              <h4 className="section-title" style={{ fontSize: '1rem' }}>Follow-up questions</h4>
-              {followUps.length > 0 ? (
-                <ol style={{ marginTop: 8, paddingLeft: 20 }}>
-                  {followUps.map((q, idx) => (
-                    <li key={idx} style={{ marginBottom: 12 }}>
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'flex-start',
-                          gap: 12,
-                        }}
-                      >
-                        <p style={{ marginBottom: 4 }}>{q}</p>
-                        <button
-                          type="button"
-                          className="btn-link"
-                          onClick={() => handleEditFollowUpQuestion(idx)}
-                          aria-label={`Edit answer for follow-up question ${idx + 1}`}
-                          disabled={loading}
-                        >
-                          Edit answer
-                        </button>
-                      </div>
-                      <p style={{ margin: 0, fontWeight: 600 }}>Your answer:</p>
-                      <p style={{ margin: '4px 0 0 0' }}>{followUpAnswers[idx]}</p>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p style={{ marginTop: 8 }}>No additional questions needed — we have enough detail for the next step.</p>
-              )}
-              {followUps.length > 0 && (
-                <div className="actions" style={{ marginTop: 12 }}>
-                  <button
-                    type="button"
-                    className="btn-link"
-                    onClick={handleRegenerateFollowUps}
-                    disabled={loading}
-                  >
-                    Ask for new follow-up questions (costs {formatCredits(followUpCreditCost)} credits)
-                  </button>
-                </div>
-              )}
-              {notes && <p style={{ marginTop: 8, fontStyle: 'italic' }}>{notes}</p>}
-              {responseId && (
-                <p style={{ marginTop: 12, fontSize: '0.85rem', color: '#6b7280' }}>Reference ID: {responseId}</p>
-              )}
-            </div>
+            {summaryCards}
 
             <div
               className="actions"
@@ -961,12 +1159,158 @@ export default function WritingDeskClient() {
                   Review follow-up answers
                 </button>
               )}
-              <button type="button" className="btn-primary" disabled={loading}>
-                Create my letter
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={handleStartResearch}
+                  disabled={loading}
+                >
+                  Create my letter
+                </button>
+                <p style={{ margin: 0, fontSize: '0.85rem', color: '#6b7280' }}>
+                  We’ll run deep research next (costs 0.7 credits).
+                </p>
+              </div>
             </div>
           </div>
         )}
+
+        {phase === 'research' && (
+          <div className="result" aria-live="polite">
+            <h3 className="section-title" style={{ fontSize: '1.25rem' }}>{researchStatusLabel}</h3>
+            <p className="section-sub">
+              We’re gathering evidence and citations to help you draft a fully referenced letter.
+            </p>
+
+            {serverError && (
+              <div className="status" aria-live="assertive" style={{ marginTop: 12 }}>
+                <p style={{ color: '#b91c1c' }}>{serverError}</p>
+              </div>
+            )}
+
+            {researchError && (
+              <div className="status" aria-live="polite" style={{ marginTop: 12 }}>
+                <p style={{ color: '#b45309' }}>{researchError}</p>
+              </div>
+            )}
+
+            <div className="card" style={{ padding: 16, marginTop: 16 }}>
+              <h4 className="section-title" style={{ fontSize: '1rem', marginBottom: 8 }}>Progress</h4>
+              <div style={{ height: 12, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden' }}>
+                <div
+                  style={{
+                    width: `${Math.min(Math.max(researchProgressValue ?? 0, 0), 100)}%`,
+                    height: '100%',
+                    background: '#2563eb',
+                    transition: 'width 0.4s ease',
+                  }}
+                />
+              </div>
+              <p style={{ marginTop: 12, marginBottom: 0 }}>
+                {researchProgressValue === null ? 'Waiting for updates…' : `${Math.round(researchProgressValue)}% complete`}
+              </p>
+            </div>
+
+            <div className="card" style={{ padding: 16, marginTop: 16 }}>
+              <h4 className="section-title" style={{ fontSize: '1rem' }}>Activity feed</h4>
+              {sortedResearchActivities.length > 0 ? (
+                <ol style={{ marginTop: 12, paddingLeft: 20 }}>
+                  {sortedResearchActivities.map((activity) => {
+                    const timestamp = new Date(activity.createdAt);
+                    const label = activity.label || activity.type;
+                    return (
+                      <li key={activity.id} style={{ marginBottom: 12 }}>
+                        <div style={{ fontWeight: 600 }}>{label}</div>
+                        <div style={{ fontSize: '0.85rem', color: '#6b7280' }}>
+                          {Number.isNaN(timestamp.getTime())
+                            ? activity.status
+                            : `${timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${activity.status}`}
+                        </div>
+                        {activity.url && (
+                          <div>
+                            <a href={activity.url} target="_blank" rel="noreferrer" className="btn-link">
+                              View source
+                            </a>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : (
+                <p style={{ marginTop: 8 }}>We’ll list each web search and analysis step here as it happens.</p>
+              )}
+            </div>
+
+            {research?.status === 'completed' && (
+              <div className="card" style={{ padding: 16, marginTop: 16 }}>
+                <h4 className="section-title" style={{ fontSize: '1rem' }}>Raw research findings</h4>
+                <div style={{ marginTop: 12, maxHeight: 360, overflow: 'auto', background: '#f9fafb', padding: 12, borderRadius: 8 }}>
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: '0.95rem' }}>
+                    {research.outputText || 'Research completed but no content was returned.'}
+                  </pre>
+                </div>
+              </div>
+            )}
+
+            {(research?.status === 'failed' || research?.status === 'cancelled') && (
+              <div className="status" aria-live="assertive" style={{ marginTop: 16 }}>
+                <p style={{ color: '#b91c1c' }}>
+                  {research?.error || 'The research run did not complete. You can try again when you’re ready.'}
+                </p>
+              </div>
+            )}
+
+            {summaryCards}
+
+            <div
+              className="actions"
+              style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}
+            >
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setStartOverConfirmOpen(true)}
+                disabled={loading}
+              >
+                Start again
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setEditIntakeModalOpen(true)}
+                disabled={loading}
+              >
+                Edit intake answers
+              </button>
+              {followUps.length > 0 && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => handleEditFollowUpQuestion(0)}
+                  disabled={loading}
+                >
+                  Review follow-up answers
+                </button>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={handleStartResearch}
+                  disabled={loading}
+                >
+                  {research?.status === 'completed' ? 'Run research again' : 'Restart research'}
+                </button>
+                <p style={{ margin: 0, fontSize: '0.85rem', color: '#6b7280' }}>
+                  Each run costs 0.7 credits.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
       </section>
     </>

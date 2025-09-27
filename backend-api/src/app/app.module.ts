@@ -58,6 +58,15 @@ function validateConfig(config: Record<string, unknown>) {
     }
   }
 
+  const researchContextSize = config.OPENAI_DEEP_RESEARCH_WEB_SEARCH_CONTEXT_SIZE;
+  if (typeof researchContextSize === 'string' && researchContextSize.trim().length > 0) {
+    const normalised = researchContextSize.trim().toLowerCase();
+    const allowed = ['shallow', 'medium', 'deep'];
+    if (!allowed.includes(normalised)) {
+      errors.push('OPENAI_DEEP_RESEARCH_WEB_SEARCH_CONTEXT_SIZE must be shallow, medium, or deep');
+    }
+  }
+
   if (errors.length) {
     throw new Error(`Environment validation failed:\n- ${errors.join('\n- ')}`);
   }

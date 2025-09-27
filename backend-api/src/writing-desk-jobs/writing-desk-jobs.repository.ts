@@ -28,16 +28,23 @@ export class WritingDeskJobsRepository {
       followUpAnswersCiphertext: string;
       notes: string | null;
       responseId: string | null;
+      researchStateCiphertext?: string | null;
     },
   ): Promise<WritingDeskJobRecord> {
+    const setPayload: Record<string, unknown> = {
+      ...payload,
+      userId,
+    };
+
+    if (typeof payload.researchStateCiphertext === 'undefined') {
+      delete setPayload.researchStateCiphertext;
+    }
+
     const doc = await this.model
       .findOneAndUpdate(
         { userId },
         {
-          $set: {
-            ...payload,
-            userId,
-          },
+          $set: setPayload,
           $unset: { form: '', followUpAnswers: '' },
         },
         { new: true, upsert: true, setDefaultsOnInsert: true }
