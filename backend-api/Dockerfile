@@ -2,7 +2,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Install full workspace dependencies for building
-COPY package*.json ./
+COPY package.json package-lock.json ./
 RUN npm ci
 
 # Copy source and build
