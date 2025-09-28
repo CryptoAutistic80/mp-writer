@@ -17,6 +17,10 @@ const DEEP_RESEARCH_CREDIT_COST = 0.7;
 type DeepResearchRequestExtras = {
   tools?: Array<Record<string, unknown>>;
   max_tool_calls?: number;
+  reasoning?: {
+    summary?: string | null;
+    effort?: string | null;
+  };
 };
 
 type DeepResearchStreamPayload =
@@ -434,6 +438,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           jobId: baselineJob.jobId,
           model,
           tools: requestExtras.tools?.length ?? 0,
+          reasoning: requestExtras.reasoning ?? null,
         })}`,
       );
 
@@ -772,7 +777,23 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       extras.max_tool_calls = maxToolCalls;
     }
 
+    extras.reasoning = this.buildDeepResearchReasoningConfig();
+
     return extras;
+  }
+
+  private buildDeepResearchReasoningConfig(): {
+    summary: string | null;
+    effort: string | null;
+  } {
+    const summary = this.parseReasoningSummary(
+      this.config.get<string>('OPENAI_DEEP_RESEARCH_REASONING_SUMMARY'),
+    );
+    const effort = this.parseReasoningEffort(
+      this.config.get<string>('OPENAI_DEEP_RESEARCH_REASONING_EFFORT'),
+    );
+
+    return { summary, effort };
   }
 
   private async resolveUserMpName(userId: string): Promise<string | null> {
@@ -803,6 +824,34 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
     if (!raw) return null;
     const parsed = Number.parseInt(raw, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  private parseReasoningSummary(raw: string | undefined): string | null {
+    if (typeof raw !== 'string' || raw.trim().length === 0) {
+      return 'auto';
+    }
+    const normalised = raw.trim().toLowerCase();
+    if (['auto', 'on', 'enabled', 'stream'].includes(normalised)) {
+      return 'auto';
+    }
+    if (['off', 'none', 'disabled'].includes(normalised)) {
+      return null;
+    }
+    return raw.trim();
+  }
+
+  private parseReasoningEffort(raw: string | undefined): string | null {
+    if (typeof raw !== 'string' || raw.trim().length === 0) {
+      return 'medium';
+    }
+    const normalised = raw.trim().toLowerCase();
+    if (['low', 'medium', 'high', 'auto'].includes(normalised)) {
+      return normalised;
+    }
+    if (['off', 'none', 'disabled'].includes(normalised)) {
+      return null;
+    }
+    return 'medium';
   }
 
   private async persistDeepResearchResult(

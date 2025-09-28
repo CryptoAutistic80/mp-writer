@@ -71,31 +71,57 @@ type DeepResearchHandshakeResponse = {
   streamPath?: string | null;
 };
 
-const MAX_RESEARCH_ACTIVITY_ITEMS = 5;
+const MAX_RESEARCH_ACTIVITY_ITEMS = 10;
 
-const describeResearchEvent = (event: { type?: string; [key: string]: any }): string | null => {
+type ResearchActivityDescriptor = {
+  text: string;
+  options?: {
+    mergeKey?: string;
+    strategy?: 'replace' | 'append';
+  };
+};
+
+const extractReasoningSummary = (event: Record<string, any>): string | null => {
+  if (!event) return null;
+  const direct = typeof event.reasoning === 'string' ? event.reasoning : null;
+  if (direct && direct.trim().length > 0) return direct.trim();
+  const nestedSummary = typeof event?.reasoning?.summary === 'string' ? event.reasoning.summary : null;
+  if (nestedSummary && nestedSummary.trim().length > 0) return nestedSummary.trim();
+  const summary = typeof event.summary === 'string' ? event.summary : null;
+  if (summary && summary.trim().length > 0) return summary.trim();
+  return null;
+};
+
+const describeResearchEvent = (event: { type?: string; [key: string]: any }): ResearchActivityDescriptor | null => {
   if (!event || typeof event.type !== 'string') return null;
   switch (event.type) {
     case 'response.web_search_call.searching':
-      return 'Searching the web for relevant sources…';
+      return { text: 'Searching the web for relevant sources…' };
     case 'response.web_search_call.in_progress':
-      return 'Reviewing a web result…';
+      return { text: 'Reviewing a web result…' };
     case 'response.web_search_call.completed':
-      return 'Finished reviewing a web result.';
+      return { text: 'Finished reviewing a web result.' };
     case 'response.file_search_call.searching':
-      return 'Searching private documents for supporting evidence…';
+      return { text: 'Searching private documents for supporting evidence…' };
     case 'response.file_search_call.completed':
-      return 'Finished reviewing private documents.';
+      return { text: 'Finished reviewing private documents.' };
     case 'response.code_interpreter_call.in_progress':
-      return 'Analysing data with the code interpreter…';
+      return { text: 'Analysing data with the code interpreter…' };
     case 'response.code_interpreter_call.completed':
-      return 'Completed data analysis via code interpreter.';
+      return { text: 'Completed data analysis via code interpreter.' };
     case 'response.reasoning.delta': {
       const summary = typeof event.delta === 'string' ? event.delta.trim() : '';
-      return summary.length > 0 ? summary : null;
+      return summary.length > 0
+        ? { text: summary, options: { mergeKey: 'reasoning', strategy: 'append' } }
+        : null;
     }
-    case 'response.reasoning.done':
-      return 'Reasoning summary updated.';
+    case 'response.reasoning.done': {
+      const summary = extractReasoningSummary(event);
+      return {
+        text: summary ?? 'Reasoning summary updated.',
+        options: { mergeKey: 'reasoning', strategy: summary ? 'replace' : 'append' },
+      };
+    }
     default:
       return null;
   }
@@ -137,7 +163,7 @@ export default function WritingDeskClient() {
   const [researchContent, setResearchContent] = useState<string>('');
   const [researchResponseId, setResearchResponseId] = useState<string | null>(null);
   const [researchStatus, setResearchStatus] = useState<ResearchStatus>('idle');
-  const [researchActivities, setResearchActivities] = useState<Array<{ id: string; text: string }>>([]);
+  const [researchActivities, setResearchActivities] = useState<Array<{ id: string; text: string; mergeKey?: string }>>([]);
   const [researchError, setResearchError] = useState<string | null>(null);
   const [pendingAutoResume, setPendingAutoResume] = useState(false);
   const researchSourceRef = useRef<EventSource | null>(null);
@@ -181,13 +207,42 @@ export default function WritingDeskClient() {
     setPendingAutoResume(false);
   }, [closeResearchStream]);
 
-  const appendResearchActivity = useCallback((text: string) => {
-    setResearchActivities((prev) => {
-      const entry = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text };
-      const next = [entry, ...prev];
-      return next.slice(0, MAX_RESEARCH_ACTIVITY_ITEMS);
-    });
-  }, []);
+  const appendResearchActivity = useCallback(
+    (text: string, options?: { mergeKey?: string; strategy?: 'replace' | 'append' }) => {
+      setResearchActivities((prev) => {
+        const trimmed = text.trim();
+        if (trimmed.length === 0) {
+          return prev;
+        }
+
+        const mergeKey = options?.mergeKey;
+        const strategy = options?.strategy ?? 'replace';
+
+        if (mergeKey) {
+          const existingIndex = prev.findIndex((item) => item.mergeKey === mergeKey);
+          if (existingIndex >= 0) {
+            const existing = prev[existingIndex];
+            const nextText =
+              strategy === 'append' && existing.text.length > 0
+                ? `${existing.text}${existing.text.endsWith(' ') ? '' : ' '}${trimmed}`.trim()
+                : trimmed;
+            const updated = { ...existing, text: nextText };
+            const next = [updated, ...prev.filter((_, idx) => idx !== existingIndex)];
+            return next.slice(0, MAX_RESEARCH_ACTIVITY_ITEMS);
+          }
+        }
+
+        const entry = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          text: trimmed,
+          mergeKey,
+        };
+        const next = [entry, ...prev];
+        return next.slice(0, MAX_RESEARCH_ACTIVITY_ITEMS);
+      });
+    },
+    [],
+  );
 
   const updateCreditsFromStream = useCallback((value: number | null | undefined) => {
     if (typeof value === 'number' && Number.isFinite(value)) {
@@ -401,7 +456,9 @@ export default function WritingDeskClient() {
             }
           } else if (payload.type === 'event') {
             const descriptor = describeResearchEvent(payload.event);
-            if (descriptor) appendResearchActivity(descriptor);
+            if (descriptor) {
+              appendResearchActivity(descriptor.text, descriptor.options);
+            }
           } else if (payload.type === 'complete') {
             closeResearchStream();
             setResearchStatus('completed');
@@ -1201,7 +1258,7 @@ export default function WritingDeskClient() {
                   </p>
                 </div>
               )}
-              {researchStatus === 'running' && researchActivities.length > 0 && (
+              {researchActivities.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   <h5 style={{ margin: '0 0 8px 0', fontSize: '0.95rem' }}>Latest activity</h5>
                   <ul style={{ paddingLeft: 18, margin: 0 }}>

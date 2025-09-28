@@ -59,6 +59,14 @@
           "buildTarget": "backend-api:build:production"
         }
       }
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/backend-api"],
+      "options": {
+        "jestConfig": "backend-api/jest.config.ts",
+        "passWithNoTests": false
+      }
     }
   },
   "tags": []
