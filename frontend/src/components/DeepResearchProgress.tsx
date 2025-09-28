@@ -44,14 +44,17 @@ interface DeepResearchProgressProps {
 export default function DeepResearchProgress({ active, messageOverride }: DeepResearchProgressProps) {
   const [currentStep, setCurrentStep] = useState(0);
   const [progress, setProgress] = useState(0);
+  const [history, setHistory] = useState<string[]>([]);
 
   useEffect(() => {
     if (!active) {
+      setHistory([]);
       setCurrentStep(0);
       setProgress(0);
       return;
     }
 
+    setHistory([]);
     setCurrentStep(0);
     setProgress(PROGRESS_STEPS[0]?.progress ?? 0.1);
 
@@ -77,11 +80,57 @@ export default function DeepResearchProgress({ active, messageOverride }: DeepRe
   }, [currentStep]);
 
   const displayMessage = messageOverride?.trim() ? messageOverride : fallbackMessage;
+
+  useEffect(() => {
+    if (!active) {
+      setHistory([]);
+      return;
+    }
+    if (!displayMessage.trim()) return;
+    setHistory((prev) => {
+      if (prev[prev.length - 1] === displayMessage) return prev;
+      return [...prev, displayMessage];
+    });
+  }, [active, displayMessage]);
+
+  const isTerminalMessage = useMemo(() => {
+    const message = (messageOverride || '').toLowerCase();
+    if (!message.trim()) return false;
+    const patterns: RegExp[] = [
+      /completed/,
+      new RegExp('draft\\s+ready'),
+      new RegExp('\\bready\\b'),
+      /finished/,
+      /failed/,
+      /unable/,
+    ];
+    return patterns.some((pattern) => pattern.test(message));
+  }, [messageOverride]);
+
+  useEffect(() => {
+    if (!active || isTerminalMessage) {
+      setHistory([]);
+    }
+  }, [active, isTerminalMessage]);
+
+  if (!active || isTerminalMessage) {
+    return null;
+  }
+
+  const previousMessages = history.slice(0, -1);
+  const currentMessage = history[history.length - 1] ?? displayMessage;
   const percentage = Math.min(100, Math.max(5, Math.round(progress * 100)));
 
   return (
     <div className="deep-progress" aria-live="polite">
-      <p className="deep-progress-message">{displayMessage}</p>
+      {previousMessages.length > 0 && (
+        <ol className="deep-progress-activity">
+          {previousMessages.map((message, index) => (
+            <li key={`${index}-${message}`}>{message}</li>
+          ))}
+        </ol>
+      )}
+      <p className="deep-progress-message">{currentMessage}</p>
       <div
         className="deep-progress-meter"
         role="progressbar"
