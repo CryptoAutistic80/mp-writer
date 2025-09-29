@@ -9,6 +9,10 @@ import {
   WritingDeskJobRecord,
   WRITING_DESK_RESEARCH_STATUSES,
   WritingDeskResearchStatus,
+  WRITING_DESK_LETTER_TONES,
+  WRITING_DESK_LETTER_STATUSES,
+  WritingDeskLetterTone,
+  WritingDeskLetterStatus,
 } from './writing-desk-jobs.types';
 import { EncryptionService } from '../crypto/encryption.service';
 
@@ -46,6 +50,12 @@ export class WritingDeskJobsService {
       researchContent: sanitized.researchContent,
       researchResponseId: sanitized.researchResponseId,
       researchStatus: sanitized.researchStatus,
+      letterTone: sanitized.letterTone,
+      letterContent: sanitized.letterContent,
+      letterResponseId: sanitized.letterResponseId,
+      letterStatus: sanitized.letterStatus,
+      letterReferences: sanitized.letterReferences,
+      letterResult: sanitized.letterResult,
     };
 
     const saved = await this.repository.upsertActiveJob(userId, payload);
@@ -80,6 +90,12 @@ export class WritingDeskJobsService {
       return normalised.trim().length > 0 ? normalised : null;
     };
 
+    const normaliseJson = (value: string | undefined) => {
+      if (typeof value !== 'string') return null;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+
     const form: WritingDeskJobFormSnapshot = {
       issueDescription: trim(input.form?.issueDescription),
     };
@@ -108,6 +124,27 @@ export class WritingDeskJobsService {
       ? (rawStatus as WritingDeskResearchStatus)
       : 'idle';
 
+    const toneRaw = typeof input.letterTone === 'string' ? input.letterTone.trim() : '';
+    const letterTone = (WRITING_DESK_LETTER_TONES as readonly string[]).includes(toneRaw)
+      ? (toneRaw as WritingDeskLetterTone)
+      : null;
+
+    const letterContent = normaliseMultiline(input.letterContent);
+    const letterResponseId = trimNullable(input.letterResponseId);
+
+    const letterStatusRaw = typeof input.letterStatus === 'string' ? input.letterStatus.trim() : '';
+    const letterStatus = (WRITING_DESK_LETTER_STATUSES as readonly string[]).includes(letterStatusRaw)
+      ? (letterStatusRaw as WritingDeskLetterStatus)
+      : 'idle';
+
+    const letterReferences = Array.isArray(input.letterReferences)
+      ? input.letterReferences
+          .map((value) => (typeof value === 'string' ? value.trim() : ''))
+          .filter((value) => value.length > 0)
+      : [];
+
+    const letterResult = normaliseJson(input.letterResult);
+
     return {
       phase: input.phase,
       stepIndex,
@@ -120,6 +157,12 @@ export class WritingDeskJobsService {
       researchContent: normaliseMultiline(input.researchContent),
       researchResponseId: trimNullable(input.researchResponseId),
       researchStatus,
+      letterTone,
+      letterContent,
+      letterResponseId,
+      letterStatus,
+      letterReferences,
+      letterResult,
     };
   }
 
@@ -144,6 +187,14 @@ export class WritingDeskJobsService {
       researchContent: record.researchContent ?? null,
       researchResponseId: record.researchResponseId ?? null,
       researchStatus: (record as any)?.researchStatus ?? 'idle',
+      letterTone: (record as any)?.letterTone ?? null,
+      letterContent: record.letterContent ?? null,
+      letterResponseId: record.letterResponseId ?? null,
+      letterStatus: (record as any)?.letterStatus ?? 'idle',
+      letterReferences: Array.isArray((record as any)?.letterReferences)
+        ? ((record as any).letterReferences as string[]).map((value) => (typeof value === 'string' ? value : ''))
+        : [],
+      letterResult: record.letterResult ?? null,
       createdAt,
       updatedAt,
     };
@@ -218,6 +269,12 @@ export class WritingDeskJobsService {
       researchContent: snapshot.researchContent ?? null,
       researchResponseId: snapshot.researchResponseId ?? null,
       researchStatus: snapshot.researchStatus,
+      letterTone: snapshot.letterTone ?? null,
+      letterContent: snapshot.letterContent ?? null,
+      letterResponseId: snapshot.letterResponseId ?? null,
+      letterStatus: snapshot.letterStatus,
+      letterReferences: Array.isArray(snapshot.letterReferences) ? [...snapshot.letterReferences] : [],
+      letterResult: snapshot.letterResult ?? null,
       createdAt: snapshot.createdAt?.toISOString?.() ?? new Date().toISOString(),
       updatedAt: snapshot.updatedAt?.toISOString?.() ?? new Date().toISOString(),
     };

@@ -31,4 +31,10 @@ export class AiController {
     const userId = req?.user?.id ?? req?.user?._id ?? null;
     return this.ai.streamWritingDeskDeepResearch(userId, { jobId: jobId ?? null });
   }
+
+  @Sse('writing-desk/letter')
+  writingDeskLetter(@Req() req: any, @Query('jobId') jobId?: string) {
+    const userId = req?.user?.id ?? req?.user?._id ?? null;
+    return this.ai.streamWritingDeskLetter(userId, { jobId: jobId ?? null });
+  }
 }
