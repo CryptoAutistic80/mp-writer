@@ -42,6 +42,24 @@ export class WritingDeskJob {
 
   @Prop({ type: String, default: 'idle' })
   researchStatus!: string;
+
+  @Prop({ type: String, default: null })
+  letterTone!: string | null;
+
+  @Prop({ type: String, default: null })
+  letterContent!: string | null;
+
+  @Prop({ type: String, default: null })
+  letterResponseId!: string | null;
+
+  @Prop({ type: String, default: 'idle' })
+  letterStatus!: string;
+
+  @Prop({ type: [String], default: [] })
+  letterReferences!: string[];
+
+  @Prop({ type: String, default: null })
+  letterResult!: string | null;
 }
 
 export type WritingDeskJobDocument = WritingDeskJob & Document;

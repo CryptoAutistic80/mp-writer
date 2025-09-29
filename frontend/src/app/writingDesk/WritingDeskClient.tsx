@@ -6,7 +6,12 @@ import ActiveJobResumeModal from '../../features/writing-desk/components/ActiveJ
 import EditIntakeConfirmModal from '../../features/writing-desk/components/EditIntakeConfirmModal';
 import StartOverConfirmModal from '../../features/writing-desk/components/StartOverConfirmModal';
 import { useActiveWritingDeskJob } from '../../features/writing-desk/hooks/useActiveWritingDeskJob';
-import { ActiveWritingDeskJob, UpsertActiveWritingDeskJobPayload } from '../../features/writing-desk/types';
+import {
+  ActiveWritingDeskJob,
+  UpsertActiveWritingDeskJobPayload,
+  WritingDeskLetterTone,
+  WritingDeskLetterStatus,
+} from '../../features/writing-desk/types';
 
 type StepKey = 'issueDescription';
 
@@ -25,6 +30,38 @@ const steps: Array<{
       'Share the full story, including who is affected, what has happened so far, and what you hope your MP can help achieve.',
     placeholder:
       'E.g. The heating in my flat has been broken since December. My children are getting sick, I have reported it twice, and I need the housing association to replace the boiler within two weeks…',
+  },
+];
+
+const LETTER_TONE_OPTIONS: Array<{
+  value: WritingDeskLetterTone;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'formal',
+    label: 'Formal',
+    description: 'Traditional and respectful parliamentary language.',
+  },
+  {
+    value: 'polite_but_firm',
+    label: 'Polite but firm',
+    description: 'Courteous yet assertive about accountability and action.',
+  },
+  {
+    value: 'empathetic',
+    label: 'Empathetic',
+    description: 'Warm, compassionate tone centred on lived experience.',
+  },
+  {
+    value: 'urgent',
+    label: 'Urgent',
+    description: 'Direct and time-sensitive, stressing the need for quick help.',
+  },
+  {
+    value: 'neutral',
+    label: 'Neutral',
+    description: 'Balanced and factual focus on the key evidence.',
   },
 ];
 
@@ -53,6 +90,28 @@ type DeepResearchHandshakeResponse = {
 };
 
 const MAX_RESEARCH_ACTIVITY_ITEMS = 10;
+
+type LetterStreamMessage =
+  | { type: 'status'; status: string; remainingCredits?: number | null }
+  | { type: 'letter_delta'; html: string }
+  | { type: 'event'; event: { type?: string; [key: string]: any } }
+  | {
+      type: 'complete';
+      responseId: string | null;
+      remainingCredits: number | null;
+      letter: {
+        letter_content?: string;
+        references?: string[];
+      } & Record<string, unknown>;
+    }
+  | { type: 'error'; message: string; remainingCredits?: number | null };
+
+type LetterHandshakeResponse = {
+  jobId?: string | null;
+  streamPath?: string | null;
+};
+
+const MAX_LETTER_ACTIVITY_ITEMS = 10;
 
 const extractReasoningSummary = (value: unknown): string | null => {
   if (typeof value === 'string') {
@@ -143,6 +202,56 @@ const describeResearchEvent = (event: { type?: string; [key: string]: any }): st
   }
 };
 
+const sanitizeLetterHtml = (html: string): string => {
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
+    return html;
+  }
+
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html');
+    const allowedTags = new Set(['P', 'STRONG', 'EM', 'UL', 'OL', 'LI', 'A', 'BR']);
+
+    const walker = doc.body.querySelectorAll('*');
+    walker.forEach((el) => {
+      if (!allowedTags.has(el.tagName)) {
+        const parent = el.parentNode;
+        if (!parent) {
+          el.remove();
+          return;
+        }
+        while (el.firstChild) {
+          parent.insertBefore(el.firstChild, el);
+        }
+        parent.removeChild(el);
+        return;
+      }
+
+      if (el.tagName === 'A') {
+        const href = el.getAttribute('href') || '';
+        if (!/^https?:/i.test(href)) {
+          el.removeAttribute('href');
+        }
+        el.setAttribute('target', '_blank');
+        el.setAttribute('rel', 'noreferrer noopener');
+      }
+
+      el.removeAttribute('style');
+      el.removeAttribute('onclick');
+      el.removeAttribute('onmouseover');
+      el.removeAttribute('onmouseout');
+    });
+
+    const container = doc.body.firstElementChild;
+    if (container && container instanceof HTMLElement) {
+      return container.innerHTML;
+    }
+    return doc.body.innerHTML;
+  } catch {
+    return html;
+  }
+};
+
 export default function WritingDeskClient() {
   const [form, setForm] = useState<FormState>(initialFormState);
   const [phase, setPhase] = useState<'initial' | 'generating' | 'followup' | 'summary'>('initial');
@@ -186,6 +295,18 @@ export default function WritingDeskClient() {
   const previousPhaseRef = useRef<'initial' | 'generating' | 'followup' | 'summary'>();
   const lastResearchEventRef = useRef<number>(0);
   const lastResearchResumeAttemptRef = useRef<number>(0);
+  const [letterTone, setLetterTone] = useState<WritingDeskLetterTone>('formal');
+  const [letterStatus, setLetterStatus] = useState<WritingDeskLetterStatus>('idle');
+  const [letterContent, setLetterContent] = useState<string>('');
+  const [letterResponseId, setLetterResponseId] = useState<string | null>(null);
+  const [letterReferences, setLetterReferences] = useState<string[]>([]);
+  const [letterResult, setLetterResult] = useState<string | null>(null);
+  const [letterError, setLetterError] = useState<string | null>(null);
+  const [letterActivities, setLetterActivities] = useState<Array<{ id: string; text: string }>>([]);
+  const letterSourceRef = useRef<EventSource | null>(null);
+  const lastLetterEventRef = useRef<number>(0);
+  const [letterCopySuccess, setLetterCopySuccess] = useState(false);
+  const sanitizedLetterHtml = useMemo(() => sanitizeLetterHtml(letterContent), [letterContent]);
 
   const currentStep = phase === 'initial' ? steps[stepIndex] ?? null : null;
   const followUpCreditCost = 0.1;
@@ -216,6 +337,13 @@ export default function WritingDeskClient() {
     }
   }, []);
 
+  const closeLetterStream = useCallback(() => {
+    if (letterSourceRef.current) {
+      letterSourceRef.current.close();
+      letterSourceRef.current = null;
+    }
+  }, []);
+
   const resetResearch = useCallback(() => {
     closeResearchStream();
     setResearchContent('');
@@ -231,6 +359,26 @@ export default function WritingDeskClient() {
       const entry = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text };
       const next = [entry, ...prev];
       return next.slice(0, MAX_RESEARCH_ACTIVITY_ITEMS);
+    });
+  }, []);
+
+  const resetLetter = useCallback(() => {
+    closeLetterStream();
+    setLetterStatus('idle');
+    setLetterContent('');
+    setLetterResponseId(null);
+    setLetterReferences([]);
+    setLetterResult(null);
+    setLetterError(null);
+    setLetterActivities([]);
+    setLetterCopySuccess(false);
+  }, [closeLetterStream]);
+
+  const appendLetterActivity = useCallback((text: string) => {
+    setLetterActivities((prev) => {
+      const entry = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text };
+      const next = [entry, ...prev];
+      return next.slice(0, MAX_LETTER_ACTIVITY_ITEMS);
     });
   }, []);
 
@@ -286,6 +434,22 @@ export default function WritingDeskClient() {
           deepResearchCreditCost,
         )} credits)`;
 
+  const letterCreditState = useMemo<'loading' | 'low' | 'ok'>(() => {
+    if (availableCredits === null) return 'loading';
+    return availableCredits < letterCreditCost ? 'low' : 'ok';
+  }, [availableCredits, letterCreditCost]);
+  const letterButtonDisabled =
+    letterStatus === 'running'
+    || letterCreditState === 'loading'
+    || letterCreditState === 'low'
+    || researchStatus !== 'completed';
+  const letterButtonLabel =
+    letterStatus === 'running'
+      ? 'Composing your letter…'
+      : `${letterStatus === 'completed' ? 'Regenerate my letter' : 'Create my letter'} (costs ${formatCredits(
+          letterCreditCost,
+        )} credits)`;
+
   useEffect(() => {
     if (!isGeneratingFollowUps) {
       setEllipsisCount(0);
@@ -323,8 +487,9 @@ export default function WritingDeskClient() {
   useEffect(() => {
     return () => {
       closeResearchStream();
+      closeLetterStream();
     };
-  }, [closeResearchStream]);
+  }, [closeLetterStream, closeResearchStream]);
 
   const generatingMessage = `Generating follow-up questions${'.'.repeat((ellipsisCount % 5) + 1)}`;
 
@@ -335,7 +500,8 @@ export default function WritingDeskClient() {
     setNotes(null);
     setResponseId(null);
     resetResearch();
-  }, [resetResearch]);
+    resetLetter();
+  }, [resetLetter, resetResearch]);
 
   const resetLocalState = useCallback(() => {
     setForm({ ...initialFormState });
@@ -347,7 +513,9 @@ export default function WritingDeskClient() {
     setLoading(false);
     setShowSummaryDetails(false);
     resetFollowUps();
-  }, [resetFollowUps]);
+    setLetterTone('formal');
+    resetLetter();
+  }, [resetFollowUps, resetLetter]);
 
   const startDeepResearch = useCallback(
     async (options?: { resume?: boolean }) => {
@@ -495,6 +663,164 @@ export default function WritingDeskClient() {
     [appendResearchActivity, closeResearchStream, jobId, researchStatus, updateCreditsFromStream],
   );
 
+  const startLetterComposition = useCallback(
+    async (options?: { resume?: boolean }) => {
+      const resume = options?.resume === true;
+      if (!resume && letterStatus === 'running') return;
+
+      closeLetterStream();
+      setLetterStatus('running');
+      setLetterError(null);
+      if (!resume) {
+        setLetterContent('');
+        setLetterResponseId(null);
+        setLetterReferences([]);
+        setLetterResult(null);
+        setLetterActivities([]);
+      }
+      setLetterCopySuccess(false);
+
+      try {
+        const payload: Record<string, unknown> = { tone: letterTone };
+        if (jobId) payload.jobId = jobId;
+        if (resume) payload.resume = true;
+
+        const response = await fetch('/api/writing-desk/jobs/active/letter/start', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const rawBody = await response.text();
+        if (!response.ok) {
+          let message = 'We could not start composing your letter. Please try again.';
+          if (rawBody) {
+            try {
+              const parsed = JSON.parse(rawBody) as { message?: string };
+              if (parsed && typeof parsed.message === 'string' && parsed.message.trim().length > 0) {
+                message = parsed.message.trim();
+              }
+            } catch {
+              const trimmed = rawBody.trim();
+              if (trimmed.length > 0) {
+                message = trimmed;
+              }
+            }
+          }
+          throw new Error(message);
+        }
+
+        let handshake: LetterHandshakeResponse | null = null;
+        if (rawBody) {
+          try {
+            handshake = JSON.parse(rawBody) as LetterHandshakeResponse;
+          } catch {
+            // Ignore parse failure, we will fall back to defaults.
+          }
+        }
+
+        const streamPath =
+          handshake && typeof handshake.streamPath === 'string' && handshake.streamPath.trim().length > 0
+            ? handshake.streamPath.trim()
+            : '/api/ai/writing-desk/letter';
+        const endpoint = new URL(streamPath, window.location.origin);
+        const resolvedJobId =
+          handshake && typeof handshake.jobId === 'string' && handshake.jobId.trim().length > 0
+            ? handshake.jobId.trim()
+            : jobId;
+        if (resolvedJobId && !endpoint.searchParams.has('jobId')) {
+          endpoint.searchParams.set('jobId', resolvedJobId);
+        }
+
+        if (resolvedJobId && resolvedJobId !== jobId) {
+          setJobId(resolvedJobId);
+        }
+
+        const source = new EventSource(endpoint.toString(), { withCredentials: true });
+        letterSourceRef.current = source;
+
+        const markLetterActivity = () => {
+          lastLetterEventRef.current = Date.now();
+        };
+
+        source.onmessage = (event) => {
+          let payload: LetterStreamMessage | null = null;
+          try {
+            payload = JSON.parse(event.data) as LetterStreamMessage;
+          } catch {
+            return;
+          }
+          if (!payload) return;
+
+          markLetterActivity();
+
+          if (payload.type === 'status') {
+            updateCreditsFromStream(payload.remainingCredits);
+            const statusMessages: Record<string, string> = {
+              starting: 'Preparing your letter…',
+              charged: 'Credits deducted. Drafting your letter…',
+              queued: 'Letter request queued…',
+              in_progress: 'Composing your letter…',
+              completed: 'Letter drafting complete.',
+            };
+            const descriptor =
+              typeof payload.status === 'string' ? statusMessages[payload.status] : undefined;
+            if (descriptor) appendLetterActivity(descriptor);
+          } else if (payload.type === 'letter_delta') {
+            if (typeof payload.html === 'string') {
+              setLetterContent(payload.html);
+            }
+          } else if (payload.type === 'event') {
+            const descriptor = describeResearchEvent(payload.event);
+            if (descriptor) appendLetterActivity(descriptor);
+          } else if (payload.type === 'complete') {
+            closeLetterStream();
+            setLetterStatus('completed');
+            if (payload.letter && typeof payload.letter.letter_content === 'string') {
+              setLetterContent(payload.letter.letter_content);
+            }
+            if (payload.letter && Array.isArray(payload.letter.references)) {
+              setLetterReferences(
+                payload.letter.references.filter((value): value is string => typeof value === 'string'),
+              );
+            }
+            if (payload.letter) {
+              setLetterResult(JSON.stringify(payload.letter));
+            }
+            setLetterResponseId(payload.responseId ?? null);
+            updateCreditsFromStream(payload.remainingCredits);
+            appendLetterActivity('Letter draft ready.');
+          } else if (payload.type === 'error') {
+            closeLetterStream();
+            setLetterStatus('error');
+            setLetterError(payload.message || 'Letter generation failed. Please try again.');
+            updateCreditsFromStream(payload.remainingCredits);
+            appendLetterActivity('Letter generation encountered an error.');
+          }
+        };
+
+        source.onerror = () => {
+          closeLetterStream();
+          setLetterStatus('error');
+          setLetterError('The letter stream was interrupted. Please try again.');
+          appendLetterActivity('Connection lost during letter composition.');
+        };
+
+        lastLetterEventRef.current = Date.now();
+      } catch (err) {
+        closeLetterStream();
+        setLetterStatus('error');
+        const message =
+          err instanceof Error && err.message
+            ? err.message
+            : 'We could not start composing your letter. Please try again.';
+        setLetterError(message);
+        appendLetterActivity('Unable to start letter composition.');
+      }
+    },
+    [appendLetterActivity, closeLetterStream, jobId, letterStatus, letterTone, updateCreditsFromStream],
+  );
+
   useEffect(() => {
     if (!pendingAutoResume) return;
     if (!hasHandledInitialJob) return;
@@ -534,6 +860,7 @@ export default function WritingDeskClient() {
   const applySnapshot = useCallback(
     (job: ActiveWritingDeskJob) => {
       closeResearchStream();
+      closeLetterStream();
       setForm({
         issueDescription: job.form?.issueDescription ?? '',
       });
@@ -556,13 +883,24 @@ export default function WritingDeskClient() {
       setPendingAutoResume(nextStatus === 'running');
       setResearchActivities([]);
       setResearchError(null);
+      setLetterTone(job.letterTone ?? 'formal');
+      const existingLetter = job.letterContent ?? '';
+      setLetterContent(existingLetter);
+      setLetterResponseId(job.letterResponseId ?? null);
+      const nextLetterStatus = job.letterStatus ?? (existingLetter.trim().length > 0 ? 'completed' : 'idle');
+      setLetterStatus(nextLetterStatus);
+      setLetterReferences(Array.isArray(job.letterReferences) ? [...job.letterReferences] : []);
+      setLetterResult(job.letterResult ?? null);
+      setLetterError(null);
+      setLetterActivities([]);
+      setLetterCopySuccess(false);
       setError(null);
       setServerError(null);
       setShowSummaryDetails(false);
       setLoading(false);
       setJobSaveError(null);
     },
-    [closeResearchStream, resetFollowUps],
+    [closeLetterStream, closeResearchStream, resetFollowUps],
   );
 
   const resourceToPayload = useCallback(
@@ -581,6 +919,12 @@ export default function WritingDeskClient() {
       researchContent: job.researchContent ?? null,
       researchResponseId: job.researchResponseId ?? null,
       researchStatus: job.researchStatus ?? 'idle',
+      letterTone: job.letterTone ?? null,
+      letterContent: job.letterContent ?? null,
+      letterResponseId: job.letterResponseId ?? null,
+      letterStatus: job.letterStatus ?? 'idle',
+      letterReferences: Array.isArray(job.letterReferences) ? [...job.letterReferences] : [],
+      letterResult: job.letterResult ?? null,
     }),
     [],
   );
@@ -599,6 +943,12 @@ export default function WritingDeskClient() {
       researchContent,
       researchResponseId: researchResponseId ?? null,
       researchStatus,
+      letterTone,
+      letterContent,
+      letterResponseId: letterResponseId ?? null,
+      letterStatus,
+      letterReferences: [...letterReferences],
+      letterResult,
     }),
     [
       followUpAnswers,
@@ -606,6 +956,12 @@ export default function WritingDeskClient() {
       followUps,
       form,
       jobId,
+      letterContent,
+      letterReferences,
+      letterResponseId,
+      letterResult,
+      letterStatus,
+      letterTone,
       notes,
       phase,
       researchContent,
@@ -993,6 +1349,30 @@ export default function WritingDeskClient() {
     void generateFollowUps('summary');
   }, [generateFollowUps]);
 
+  const handleToneChange = useCallback(
+    (value: WritingDeskLetterTone) => {
+      if (letterTone === value) return;
+      setLetterTone(value);
+      resetLetter();
+    },
+    [letterTone, resetLetter],
+  );
+
+  const handleCopyLetter = useCallback(async () => {
+    if (!sanitizedLetterHtml) return;
+    try {
+      await navigator.clipboard.writeText(sanitizedLetterHtml);
+      setLetterCopySuccess(true);
+      setLetterError(null);
+      window.setTimeout(() => {
+        setLetterCopySuccess(false);
+      }, 2000);
+    } catch {
+      setLetterCopySuccess(false);
+      setLetterError('We could not copy the letter to your clipboard. Please try again.');
+    }
+  }, [sanitizedLetterHtml]);
+
   return (
     <>
       <StartOverConfirmModal
@@ -1223,7 +1603,10 @@ export default function WritingDeskClient() {
         {phase === 'summary' && (
           <div className="result" aria-live="polite">
             <h3 className="section-title" style={{ fontSize: '1.25rem' }}>Initial summary captured</h3>
-            <p className="section-sub">Thanks for all the information. When you’re ready, click the research button and I’ll dig into the evidence.</p>
+            <p className="section-sub">
+              Thanks for all the information. Run deep research to gather evidence, then choose a tone and I’ll compose your
+              letter while you watch it appear.
+            </p>
 
             {serverError && (
               <div className="status" aria-live="assertive" style={{ marginTop: 12 }}>
@@ -1325,7 +1708,7 @@ export default function WritingDeskClient() {
                 type="button"
                 className="btn-link"
                 onClick={() => setShowSummaryDetails((prev) => !prev)}
-                disabled={loading}
+                disabled={loading || letterStatus === 'running'}
               >
                 {showSummaryDetails ? 'Hide intake details' : 'Show intake details'}
               </button>
@@ -1370,7 +1753,7 @@ export default function WritingDeskClient() {
                               className="btn-link"
                               onClick={() => handleEditFollowUpQuestion(idx)}
                               aria-label={`Edit answer for follow-up question ${idx + 1}`}
-                              disabled={loading}
+                              disabled={loading || letterStatus === 'running'}
                             >
                               Edit answer
                             </button>
@@ -1389,7 +1772,7 @@ export default function WritingDeskClient() {
                         type="button"
                         className="btn-link"
                         onClick={handleRegenerateFollowUps}
-                        disabled={loading}
+                        disabled={loading || letterStatus === 'running'}
                       >
                         Ask for new follow-up questions (costs {formatCredits(followUpCreditCost)} credits)
                       </button>
@@ -1403,6 +1786,133 @@ export default function WritingDeskClient() {
               </>
             )}
 
+            <div className="card" style={{ padding: 16, marginTop: 16 }}>
+              <h4 className="section-title" style={{ fontSize: '1rem' }}>Compose your letter</h4>
+              <p style={{ marginTop: 8 }}>
+                Pick the tone that fits your situation and I&apos;ll use your intake answers, follow-ups, and research to write
+                a polished letter.
+              </p>
+
+              {letterError && (
+                <div className="status" aria-live="assertive" style={{ marginTop: 12 }}>
+                  <p style={{ color: '#b91c1c' }}>{letterError}</p>
+                </div>
+              )}
+
+              <fieldset style={{ border: 'none', padding: 0, margin: '16px 0 0 0' }} disabled={letterStatus === 'running'}>
+                <legend style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: 8 }}>Choose a tone</legend>
+                <div className="tone-options">
+                  {LETTER_TONE_OPTIONS.map((option) => (
+                    <label
+                      key={option.value}
+                      className={`tone-option${letterTone === option.value ? ' tone-option--selected' : ''}`}
+                    >
+                      <input
+                        type="radio"
+                        name="letter-tone"
+                        value={option.value}
+                        checked={letterTone === option.value}
+                        onChange={() => handleToneChange(option.value)}
+                      />
+                      <div className="tone-option__content">
+                        <span className="tone-option__label">{option.label}</span>
+                        <span className="tone-option__description">{option.description}</span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <div style={{ marginTop: 16 }}>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => startLetterComposition()}
+                  disabled={letterButtonDisabled}
+                >
+                  {letterButtonLabel}
+                </button>
+                {letterCreditState === 'low' && (
+                  <p style={{ marginTop: 8, color: '#b91c1c' }}>
+                    You need at least {formatCredits(letterCreditCost)} credits to compose your letter.
+                  </p>
+                )}
+                {letterCreditState === 'loading' && (
+                  <p style={{ marginTop: 8, color: '#2563eb' }}>Checking your available credits…</p>
+                )}
+                {researchStatus !== 'completed' && (
+                  <p style={{ marginTop: 8, color: '#6b7280' }}>
+                    Run deep research first so we can cite the strongest evidence in your letter.
+                  </p>
+                )}
+              </div>
+
+              {letterStatus === 'running' && (
+                <div className="research-progress" role="status" aria-live="polite" style={{ marginTop: 16 }}>
+                  <span className="research-progress__spinner" aria-hidden="true" />
+                  <div className="research-progress__content">
+                    <p>Composing your letter — this usually takes less than a minute.</p>
+                    <p>We&apos;ll stream new paragraphs here as soon as they&apos;re ready.</p>
+                  </div>
+                </div>
+              )}
+
+              {letterActivities.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <h5 style={{ margin: '0 0 8px 0', fontSize: '0.95rem' }}>Latest activity</h5>
+                  <ul style={{ paddingLeft: 18, margin: 0 }}>
+                    {letterActivities.map((activity) => (
+                      <li key={activity.id} style={{ marginBottom: 4 }}>
+                        {activity.text}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="letter-preview" style={{ marginTop: 16 }} aria-live="polite">
+                {sanitizedLetterHtml ? (
+                  <div dangerouslySetInnerHTML={{ __html: sanitizedLetterHtml }} />
+                ) : letterStatus === 'running' ? (
+                  <p style={{ margin: 0 }}>Drafting your letter…</p>
+                ) : (
+                  <p style={{ margin: 0 }}>Click the button above to generate your letter with the selected tone.</p>
+                )}
+              </div>
+
+              {letterReferences.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <h5 style={{ margin: '0 0 8px 0', fontSize: '0.95rem' }}>References cited</h5>
+                  <ul style={{ paddingLeft: 18, margin: 0 }}>
+                    {letterReferences.map((reference, index) => (
+                      <li key={`${reference}-${index}`} style={{ marginBottom: 4 }}>
+                        <a href={reference} target="_blank" rel="noreferrer noopener">
+                          {reference}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="actions" style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleCopyLetter}
+                  disabled={!sanitizedLetterHtml || letterStatus === 'running'}
+                >
+                  Copy letter HTML
+                </button>
+                {letterResponseId && (
+                  <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>Letter reference ID: {letterResponseId}</span>
+                )}
+                {letterCopySuccess && (
+                  <span style={{ fontSize: '0.85rem', color: '#16a34a' }}>Copied to clipboard!</span>
+                )}
+              </div>
+            </div>
+
             <div
               className="actions"
               style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}
@@ -1411,7 +1921,7 @@ export default function WritingDeskClient() {
                 type="button"
                 className="btn-secondary"
                 onClick={() => setStartOverConfirmOpen(true)}
-                disabled={loading}
+                disabled={loading || letterStatus === 'running'}
               >
                 Start again
               </button>
@@ -1419,7 +1929,7 @@ export default function WritingDeskClient() {
                 type="button"
                 className="btn-secondary"
                 onClick={() => setEditIntakeModalOpen(true)}
-                disabled={loading || researchStatus === 'running'}
+                disabled={loading || researchStatus === 'running' || letterStatus === 'running'}
               >
                 Edit intake answers
               </button>
@@ -1428,18 +1938,9 @@ export default function WritingDeskClient() {
                   type="button"
                   className="btn-secondary"
                   onClick={() => handleEditFollowUpQuestion(0)}
-                  disabled={loading || researchStatus === 'running'}
+                  disabled={loading || researchStatus === 'running' || letterStatus === 'running'}
                 >
                   Review follow-up answers
-                </button>
-              )}
-              {researchStatus === 'completed' && (
-                <button
-                  type="button"
-                  className="btn-primary create-letter-button"
-                  disabled={loading}
-                >
-                  Create my letter (costs {formatCredits(letterCreditCost)} credits)
                 </button>
               )}
             </div>
@@ -1448,29 +1949,86 @@ export default function WritingDeskClient() {
       </div>
       </section>
       <style jsx>{`
-        @keyframes create-letter-jiggle {
-          0%, 100% {
-            transform: translateX(0);
-          }
-          15% {
-            transform: translateX(-2px) rotate(-1deg);
-          }
-          30% {
-            transform: translateX(2px) rotate(1deg);
-          }
-          45% {
-            transform: translateX(-2px) rotate(-1deg);
-          }
-          60% {
-            transform: translateX(2px) rotate(1deg);
-          }
-          75% {
-            transform: translateX(-1px) rotate(-0.5deg);
+        .tone-options {
+          display: grid;
+          gap: 12px;
+        }
+
+        @media (min-width: 768px) {
+          .tone-options {
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
           }
         }
 
-        .create-letter-button {
-          animation: create-letter-jiggle 1.6s ease-in-out infinite;
+        .tone-option {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          padding: 12px;
+          border: 1px solid #d1d5db;
+          border-radius: 8px;
+          background: #ffffff;
+          cursor: pointer;
+          transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+        }
+
+        .tone-option input {
+          margin-top: 4px;
+        }
+
+        .tone-option__content {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .tone-option__label {
+          font-weight: 600;
+        }
+
+        .tone-option__description {
+          color: #4b5563;
+          font-size: 0.9rem;
+          line-height: 1.4;
+        }
+
+        .tone-option--selected {
+          border-color: #2563eb;
+          box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+          background: #eff6ff;
+        }
+
+        fieldset:disabled .tone-option {
+          cursor: not-allowed;
+          opacity: 0.75;
+        }
+
+        .letter-preview {
+          border: 1px solid #d1d5db;
+          border-radius: 8px;
+          background: #f9fafb;
+          padding: 16px;
+          color: #111827;
+          line-height: 1.6;
+        }
+
+        .letter-preview p {
+          margin: 0 0 1em 0;
+        }
+
+        .letter-preview p:last-child {
+          margin-bottom: 0;
+        }
+
+        .letter-preview ul,
+        .letter-preview ol {
+          margin: 0 0 1em 0;
+          padding-left: 1.25rem;
+        }
+
+        .letter-preview a {
+          color: #2563eb;
+          text-decoration: underline;
         }
       `}</style>
     </>

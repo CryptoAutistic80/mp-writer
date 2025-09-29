@@ -13,8 +13,12 @@ import {
 import {
   WRITING_DESK_JOB_PHASES,
   WRITING_DESK_RESEARCH_STATUSES,
+  WRITING_DESK_LETTER_STATUSES,
+  WRITING_DESK_LETTER_TONES,
   WritingDeskJobPhase,
   WritingDeskResearchStatus,
+  WritingDeskLetterStatus,
+  WritingDeskLetterTone,
 } from '../writing-desk-jobs.types';
 
 class WritingDeskJobFormDto {
@@ -74,4 +78,32 @@ export class UpsertActiveWritingDeskJobDto {
   @IsOptional()
   @IsEnum(WRITING_DESK_RESEARCH_STATUSES)
   researchStatus?: WritingDeskResearchStatus;
+
+  @IsOptional()
+  @IsEnum(WRITING_DESK_LETTER_TONES)
+  letterTone?: WritingDeskLetterTone;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  letterContent?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  letterResponseId?: string;
+
+  @IsOptional()
+  @IsEnum(WRITING_DESK_LETTER_STATUSES)
+  letterStatus?: WritingDeskLetterStatus;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  letterReferences?: string[];
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  letterResult?: string;
 }
