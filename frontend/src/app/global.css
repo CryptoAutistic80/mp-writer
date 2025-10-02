@@ -1332,7 +1332,8 @@ body {
   background-color: rgba(55, 65, 81, 0.45);
 }
 
-.research-progress {
+.research-progress,
+.letter-progress {
   margin-top: 12px;
   display: flex;
   align-items: center;
@@ -1356,17 +1357,51 @@ body {
   flex-shrink: 0;
 }
 
-.research-progress__content p {
+.research-progress__content p,
+.letter-progress__content p {
   margin: 0 0 4px;
 }
 
-.research-progress__content p:last-child {
+.research-progress__content p:last-child,
+.letter-progress__content p:last-child {
   margin-bottom: 0;
   color: #1f2937;
 }
 
-.research-progress__content p:first-child {
+.research-progress__content p:first-child,
+.letter-progress__content p:first-child {
   font-style: italic;
+}
+
+.letter-preview {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  min-height: 240px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: #111827;
+}
+
+.letter-preview p {
+  margin: 0 0 1rem;
+}
+
+.letter-preview p:last-child {
+  margin-bottom: 0;
+}
+
+.letter-preview ul,
+.letter-preview ol {
+  margin: 0 0 1rem;
+  padding-left: 1.5rem;
+  white-space: normal;
+}
+
+.letter-preview ul:last-child,
+.letter-preview ol:last-child {
+  margin-bottom: 0;
 }
 
 @keyframes research-progress-spin {

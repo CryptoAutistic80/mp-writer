@@ -97,6 +97,7 @@ type DeepResearchHandshakeResponse = {
 };
 
 const MAX_RESEARCH_ACTIVITY_ITEMS = 10;
+const MAX_LETTER_ACTIVITY_ITEMS = 4;
 
 interface LetterStreamLetterPayload {
   mpName: string;
@@ -283,6 +284,9 @@ export default function WritingDeskClient() {
   const [letterMetadata, setLetterMetadata] = useState<LetterStreamLetterPayload | null>(null);
   const letterSourceRef = useRef<EventSource | null>(null);
   const letterJsonBufferRef = useRef<string>('');
+  const letterProgressMessage = letterStatusMessage?.trim() ? letterStatusMessage : 'Composing your letter…';
+  const letterProgressSubtext =
+    'We’ll keep posting updates in the reasoning feed below while the letter is being drafted.';
 
   const currentStep = phase === 'initial' ? steps[stepIndex] ?? null : null;
   const followUpCreditCost = 0.1;
@@ -361,7 +365,7 @@ export default function WritingDeskClient() {
     setLetterEvents((prev) => {
       const entry = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text };
       const next = [entry, ...prev];
-      return next.slice(0, MAX_RESEARCH_ACTIVITY_ITEMS);
+      return next.slice(0, MAX_LETTER_ACTIVITY_ITEMS);
     });
   }, []);
 
@@ -1937,7 +1941,13 @@ export default function WritingDeskClient() {
             {letterPhase === 'streaming' && (
               <div className="card" style={{ padding: 16, marginTop: 16 }}>
                 <h4 className="section-title" style={{ fontSize: '1.1rem' }}>Drafting your letter</h4>
-                {letterStatusMessage && <p style={{ marginTop: 8 }}>{letterStatusMessage}</p>}
+                <div className="letter-progress" role="status" aria-live="polite">
+                  <span className="research-progress__spinner" aria-hidden="true" />
+                  <div className="letter-progress__content">
+                    <p>{letterProgressMessage}</p>
+                    <p>{letterProgressSubtext}</p>
+                  </div>
+                </div>
                 {letterReasoningVisible && (
                   <div style={{ marginTop: 16 }}>
                     <h5 style={{ margin: '0 0 8px 0', fontSize: '0.95rem' }}>Reasoning feed</h5>
