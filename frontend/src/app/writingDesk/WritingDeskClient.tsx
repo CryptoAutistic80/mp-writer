@@ -284,6 +284,7 @@ export default function WritingDeskClient() {
   const [letterMetadata, setLetterMetadata] = useState<LetterStreamLetterPayload | null>(null);
   const letterSourceRef = useRef<EventSource | null>(null);
   const letterJsonBufferRef = useRef<string>('');
+  const [isStartingLetter, setIsStartingLetter] = useState(false);
   const letterProgressMessage = letterStatusMessage?.trim() ? letterStatusMessage : 'Composing your letter…';
   const letterProgressSubtext =
     'We’ll keep posting updates in the reasoning feed below while the letter is being drafted.';
@@ -341,7 +342,8 @@ export default function WritingDeskClient() {
     setLetterReasoningVisible(true);
     setLetterMetadata(null);
     letterJsonBufferRef.current = '';
-  }, [closeLetterStream]);
+    setIsStartingLetter(false);
+  }, [closeLetterStream, setIsStartingLetter]);
 
   const resetResearch = useCallback(() => {
     closeResearchStream();
@@ -706,6 +708,7 @@ export default function WritingDeskClient() {
       }
       const source = new EventSource(resolvedPath, { withCredentials: true });
       letterSourceRef.current = source;
+      setIsStartingLetter(false);
 
       source.onmessage = (event) => {
         let payload: LetterStreamMessage | null = null;
@@ -781,25 +784,27 @@ export default function WritingDeskClient() {
           setLetterStatusMessage(null);
           setLetterMetadata(null);
           closeLetterStream();
+          setIsStartingLetter(false);
         }
       };
 
       source.onerror = () => {
         closeLetterStream();
         setLetterStatus('error');
-      setLetterPhase('error');
-      setLetterError('The letter stream disconnected. Please try again.');
-      setLetterStatusMessage(null);
-    };
-  },
-  [appendLetterEvent, closeLetterStream, setLetterMetadata, updateCreditsFromStream],
+        setLetterPhase('error');
+        setLetterError('The letter stream disconnected. Please try again.');
+        setLetterStatusMessage(null);
+        setIsStartingLetter(false);
+      };
+    },
+    [appendLetterEvent, closeLetterStream, setIsStartingLetter, setLetterMetadata, updateCreditsFromStream],
   );
 
   const beginLetterComposition = useCallback(
     async (tone: WritingDeskLetterTone) => {
-      setLetterStatus('generating');
-      setLetterPhase('streaming');
-      setLetterStatusMessage('Preparing your letter request…');
+      if (isStartingLetter) return;
+      setIsStartingLetter(true);
+      setLetterStatusMessage(null);
       setLetterError(null);
       setSelectedTone(tone);
       setLetterEvents([]);
@@ -823,9 +828,10 @@ export default function WritingDeskClient() {
         setLetterPhase('error');
         setLetterError(error?.message || 'We could not start letter composition. Please try again.');
         setLetterStatusMessage(null);
+        setIsStartingLetter(false);
       }
     },
-    [jobId, openLetterStream, setJobId],
+    [isStartingLetter, jobId, openLetterStream, setIsStartingLetter, setJobId],
   );
 
   const applySnapshot = useCallback(
@@ -1407,13 +1413,15 @@ export default function WritingDeskClient() {
     setLetterStatusMessage(null);
     setLetterError(null);
     setShowSummaryDetails(false);
-  }, [letterStatus, resetLetter]);
+    setIsStartingLetter(false);
+  }, [letterStatus, resetLetter, setIsStartingLetter]);
 
   const handleToneSelect = useCallback(
     (tone: WritingDeskLetterTone) => {
+      if (isStartingLetter) return;
       void beginLetterComposition(tone);
     },
-    [beginLetterComposition],
+    [beginLetterComposition, isStartingLetter],
   );
 
   const handleCopyLetter = useCallback(async () => {
@@ -1920,6 +1928,7 @@ export default function WritingDeskClient() {
                         className="tone-option"
                         data-tone={tone}
                         onClick={() => handleToneSelect(tone)}
+                        disabled={isStartingLetter}
                       >
                         <span className="tone-option__badge" aria-hidden="true">
                           {toneInfo.icon}
@@ -1930,8 +1939,16 @@ export default function WritingDeskClient() {
                     );
                   })}
                 </div>
+                {isStartingLetter && (
+                  <p style={{ marginTop: 16, color: '#1f2937' }}>Preparing your letter request…</p>
+                )}
                 <div className="actions" style={{ marginTop: 16, display: 'flex', gap: 12 }}>
-                  <button type="button" className="btn-secondary" onClick={() => setLetterPhase('idle')}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setLetterPhase('idle')}
+                    disabled={isStartingLetter}
+                  >
                     Back to summary
                   </button>
                 </div>
