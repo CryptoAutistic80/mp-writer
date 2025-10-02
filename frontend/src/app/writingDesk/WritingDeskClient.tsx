@@ -97,6 +97,7 @@ type DeepResearchHandshakeResponse = {
 };
 
 const MAX_RESEARCH_ACTIVITY_ITEMS = 10;
+const MAX_LETTER_ACTIVITY_ITEMS = 3;
 
 interface LetterStreamLetterPayload {
   mpName: string;
@@ -283,6 +284,10 @@ export default function WritingDeskClient() {
   const [letterMetadata, setLetterMetadata] = useState<LetterStreamLetterPayload | null>(null);
   const letterSourceRef = useRef<EventSource | null>(null);
   const letterJsonBufferRef = useRef<string>('');
+  const [isStartingLetter, setIsStartingLetter] = useState(false);
+  const letterProgressMessage = letterStatusMessage?.trim() ? letterStatusMessage : 'Composing your letter…';
+  const letterProgressSubtext =
+    'We’ll keep posting updates in the reasoning feed below while the letter is being drafted.';
 
   const currentStep = phase === 'initial' ? steps[stepIndex] ?? null : null;
   const followUpCreditCost = 0.1;
@@ -337,7 +342,8 @@ export default function WritingDeskClient() {
     setLetterReasoningVisible(true);
     setLetterMetadata(null);
     letterJsonBufferRef.current = '';
-  }, [closeLetterStream]);
+    setIsStartingLetter(false);
+  }, [closeLetterStream, setIsStartingLetter]);
 
   const resetResearch = useCallback(() => {
     closeResearchStream();
@@ -360,8 +366,11 @@ export default function WritingDeskClient() {
   const appendLetterEvent = useCallback((text: string) => {
     setLetterEvents((prev) => {
       const entry = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text };
-      const next = [entry, ...prev];
-      return next.slice(0, MAX_RESEARCH_ACTIVITY_ITEMS);
+      const next = [...prev, entry];
+      if (next.length <= MAX_LETTER_ACTIVITY_ITEMS) {
+        return next;
+      }
+      return next.slice(next.length - MAX_LETTER_ACTIVITY_ITEMS);
     });
   }, []);
 
@@ -702,6 +711,7 @@ export default function WritingDeskClient() {
       }
       const source = new EventSource(resolvedPath, { withCredentials: true });
       letterSourceRef.current = source;
+      setIsStartingLetter(false);
 
       source.onmessage = (event) => {
         let payload: LetterStreamMessage | null = null;
@@ -777,25 +787,27 @@ export default function WritingDeskClient() {
           setLetterStatusMessage(null);
           setLetterMetadata(null);
           closeLetterStream();
+          setIsStartingLetter(false);
         }
       };
 
       source.onerror = () => {
         closeLetterStream();
         setLetterStatus('error');
-      setLetterPhase('error');
-      setLetterError('The letter stream disconnected. Please try again.');
-      setLetterStatusMessage(null);
-    };
-  },
-  [appendLetterEvent, closeLetterStream, setLetterMetadata, updateCreditsFromStream],
+        setLetterPhase('error');
+        setLetterError('The letter stream disconnected. Please try again.');
+        setLetterStatusMessage(null);
+        setIsStartingLetter(false);
+      };
+    },
+    [appendLetterEvent, closeLetterStream, setIsStartingLetter, setLetterMetadata, updateCreditsFromStream],
   );
 
   const beginLetterComposition = useCallback(
     async (tone: WritingDeskLetterTone) => {
-      setLetterStatus('generating');
-      setLetterPhase('streaming');
-      setLetterStatusMessage('Preparing your letter request…');
+      if (isStartingLetter) return;
+      setIsStartingLetter(true);
+      setLetterStatusMessage(null);
       setLetterError(null);
       setSelectedTone(tone);
       setLetterEvents([]);
@@ -819,9 +831,10 @@ export default function WritingDeskClient() {
         setLetterPhase('error');
         setLetterError(error?.message || 'We could not start letter composition. Please try again.');
         setLetterStatusMessage(null);
+        setIsStartingLetter(false);
       }
     },
-    [jobId, openLetterStream, setJobId],
+    [isStartingLetter, jobId, openLetterStream, setIsStartingLetter, setJobId],
   );
 
   const applySnapshot = useCallback(
@@ -1403,13 +1416,15 @@ export default function WritingDeskClient() {
     setLetterStatusMessage(null);
     setLetterError(null);
     setShowSummaryDetails(false);
-  }, [letterStatus, resetLetter]);
+    setIsStartingLetter(false);
+  }, [letterStatus, resetLetter, setIsStartingLetter]);
 
   const handleToneSelect = useCallback(
     (tone: WritingDeskLetterTone) => {
+      if (isStartingLetter) return;
       void beginLetterComposition(tone);
     },
-    [beginLetterComposition],
+    [beginLetterComposition, isStartingLetter],
   );
 
   const handleCopyLetter = useCallback(async () => {
@@ -1916,6 +1931,7 @@ export default function WritingDeskClient() {
                         className="tone-option"
                         data-tone={tone}
                         onClick={() => handleToneSelect(tone)}
+                        disabled={isStartingLetter}
                       >
                         <span className="tone-option__badge" aria-hidden="true">
                           {toneInfo.icon}
@@ -1926,8 +1942,16 @@ export default function WritingDeskClient() {
                     );
                   })}
                 </div>
+                {isStartingLetter && (
+                  <p style={{ marginTop: 16, color: '#1f2937' }}>Preparing your letter request…</p>
+                )}
                 <div className="actions" style={{ marginTop: 16, display: 'flex', gap: 12 }}>
-                  <button type="button" className="btn-secondary" onClick={() => setLetterPhase('idle')}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setLetterPhase('idle')}
+                    disabled={isStartingLetter}
+                  >
                     Back to summary
                   </button>
                 </div>
@@ -1937,7 +1961,13 @@ export default function WritingDeskClient() {
             {letterPhase === 'streaming' && (
               <div className="card" style={{ padding: 16, marginTop: 16 }}>
                 <h4 className="section-title" style={{ fontSize: '1.1rem' }}>Drafting your letter</h4>
-                {letterStatusMessage && <p style={{ marginTop: 8 }}>{letterStatusMessage}</p>}
+                <div className="letter-progress" role="status" aria-live="polite">
+                  <span className="research-progress__spinner" aria-hidden="true" />
+                  <div className="letter-progress__content">
+                    <p>{letterProgressMessage}</p>
+                    <p>{letterProgressSubtext}</p>
+                  </div>
+                </div>
                 {letterReasoningVisible && (
                   <div style={{ marginTop: 16 }}>
                     <h5 style={{ margin: '0 0 8px 0', fontSize: '0.95rem' }}>Reasoning feed</h5>
