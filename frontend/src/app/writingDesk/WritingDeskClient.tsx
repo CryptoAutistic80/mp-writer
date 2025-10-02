@@ -97,7 +97,7 @@ type DeepResearchHandshakeResponse = {
 };
 
 const MAX_RESEARCH_ACTIVITY_ITEMS = 10;
-const MAX_LETTER_ACTIVITY_ITEMS = 4;
+const MAX_LETTER_ACTIVITY_ITEMS = 3;
 
 interface LetterStreamLetterPayload {
   mpName: string;
@@ -366,8 +366,11 @@ export default function WritingDeskClient() {
   const appendLetterEvent = useCallback((text: string) => {
     setLetterEvents((prev) => {
       const entry = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text };
-      const next = [entry, ...prev];
-      return next.slice(0, MAX_LETTER_ACTIVITY_ITEMS);
+      const next = [...prev, entry];
+      if (next.length <= MAX_LETTER_ACTIVITY_ITEMS) {
+        return next;
+      }
+      return next.slice(next.length - MAX_LETTER_ACTIVITY_ITEMS);
     });
   }, []);
 
