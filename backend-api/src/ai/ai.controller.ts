@@ -6,6 +6,7 @@ import { GenerateDto } from './dto/generate.dto';
 import { WritingDeskIntakeDto } from './dto/writing-desk-intake.dto';
 import { WritingDeskFollowUpDto } from './dto/writing-desk-follow-up.dto';
 import type { Response } from 'express';
+import type { UploadedAudioFile } from './types/uploaded-audio-file';
 
 @UseGuards(JwtAuthGuard)
 @Controller('ai')
@@ -30,7 +31,7 @@ export class AiController {
 
   @Post('transcriptions/stream')
   @UseInterceptors(FileInterceptor('audio'))
-  async streamTranscription(@UploadedFile() file: Express.Multer.File, @Res() res: Response) {
+  async streamTranscription(@UploadedFile() file: UploadedAudioFile | undefined, @Res() res: Response) {
     await this.ai.streamTranscription(file, res);
   }
 

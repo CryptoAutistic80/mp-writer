@@ -8,6 +8,7 @@ import { UserMpService } from '../user-mp/user-mp.service';
 import { UsersService } from '../users/users.service';
 import { UserAddressService } from '../user-address-store/user-address.service';
 import type { Response } from 'express';
+import type { UploadedAudioFile } from './types/uploaded-audio-file';
 import {
   ActiveWritingDeskJobResource,
   WritingDeskLetterStatus,
@@ -395,7 +396,7 @@ export class AiService {
     return { content };
   }
 
-  async streamTranscription(file: Express.Multer.File | undefined, res: Response) {
+  async streamTranscription(file: UploadedAudioFile | undefined, res: Response) {
     if (!file || !file.buffer || file.size === 0) {
       res.status(400).json({ message: 'An audio recording is required.' });
       return;
