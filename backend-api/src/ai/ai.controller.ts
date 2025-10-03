@@ -1,9 +1,11 @@
-import { Body, Controller, Post, Query, Req, Sse, UseGuards } from '@nestjs/common';
+import { Body, Controller, Post, Query, Req, Res, Sse, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AiService } from './ai.service';
 import { GenerateDto } from './dto/generate.dto';
 import { WritingDeskIntakeDto } from './dto/writing-desk-intake.dto';
 import { WritingDeskFollowUpDto } from './dto/writing-desk-follow-up.dto';
+import type { Response } from 'express';
 
 @UseGuards(JwtAuthGuard)
 @Controller('ai')
@@ -24,6 +26,12 @@ export class AiController {
   @Post('writing-desk/follow-up/answers')
   async writingDeskFollowUpAnswers(@Body() body: WritingDeskFollowUpDto) {
     return this.ai.recordWritingDeskFollowUps(body);
+  }
+
+  @Post('transcriptions/stream')
+  @UseInterceptors(FileInterceptor('audio'))
+  async streamTranscription(@UploadedFile() file: Express.Multer.File, @Res() res: Response) {
+    await this.ai.streamTranscription(file, res);
   }
 
   @Sse('writing-desk/deep-research')

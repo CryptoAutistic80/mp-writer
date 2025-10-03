@@ -7,6 +7,7 @@ import { WritingDeskJobsService } from '../writing-desk-jobs/writing-desk-jobs.s
 import { UserMpService } from '../user-mp/user-mp.service';
 import { UsersService } from '../users/users.service';
 import { UserAddressService } from '../user-address-store/user-address.service';
+import type { Response } from 'express';
 import {
   ActiveWritingDeskJobResource,
   WritingDeskLetterStatus,
@@ -68,6 +69,7 @@ const BACKGROUND_POLL_INTERVAL_MS = 2000;
 const BACKGROUND_POLL_TIMEOUT_MS = 20 * 60 * 1000;
 const LETTER_RUN_BUFFER_SIZE = 2000;
 const LETTER_RUN_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe';
 
 type LetterStreamPayload =
   | { type: 'status'; status: string; remainingCredits?: number | null }
@@ -391,6 +393,127 @@ export class AiService {
     });
     const content = resp.choices?.[0]?.message?.content ?? '';
     return { content };
+  }
+
+  async streamTranscription(file: Express.Multer.File | undefined, res: Response) {
+    if (!file || !file.buffer || file.size === 0) {
+      res.status(400).json({ message: 'An audio recording is required.' });
+      return;
+    }
+
+    const apiKey = this.config.get<string>('OPENAI_API_KEY');
+    if (!apiKey) {
+      res.status(503).json({ message: 'Speech transcription is not configured.' });
+      return;
+    }
+
+    const model = this.config.get<string>('OPENAI_TRANSCRIPTION_MODEL')?.trim() || DEFAULT_TRANSCRIPTION_MODEL;
+
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof (res as any).flushHeaders === 'function') {
+      (res as any).flushHeaders();
+    }
+
+    const sendEvent = (event: string, payload?: Record<string, unknown> | null) => {
+      const data = payload ? JSON.stringify(payload) : '{}';
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${data}\n\n`);
+      if (typeof (res as any).flush === 'function') {
+        (res as any).flush();
+      }
+    };
+
+    const extractDeltaText = (event: any): string => {
+      if (!event) return '';
+      if (typeof event.delta === 'string') {
+        return event.delta;
+      }
+      if (event.delta && typeof event.delta === 'object' && typeof event.delta.text === 'string') {
+        return event.delta.text as string;
+      }
+      if (typeof event.text === 'string') {
+        return event.text as string;
+      }
+      return '';
+    };
+
+    let stream: ResponseStreamLike | null = null;
+    let hasError = false;
+
+    const cleanup = () => {
+      try {
+        stream?.controller?.abort?.();
+      } catch {
+        // ignore abort errors
+      }
+    };
+
+    res.on('close', () => {
+      cleanup();
+    });
+
+    try {
+      const client = await this.getOpenAiClient(apiKey);
+      const { toFile } = await import('openai/uploads');
+      const audioFile = await toFile(file.buffer, file.originalname || 'audio.webm', {
+        type: file.mimetype || 'audio/webm',
+      });
+
+      stream = (await client.audio.transcriptions.create({
+        file: audioFile,
+        model,
+        response_format: 'text',
+        stream: true,
+      })) as ResponseStreamLike;
+
+      let aggregated = '';
+
+      for await (const event of stream) {
+        const type = (event as any)?.type ?? '';
+        if (type === 'transcript.text.delta' || type === 'transcript.delta') {
+          const deltaText = extractDeltaText(event);
+          if (deltaText) {
+            aggregated += deltaText;
+            sendEvent('delta', { text: deltaText });
+          }
+        } else if (type === 'transcript.text.done' || type === 'transcript.done') {
+          const finalText = extractDeltaText(event);
+          if (finalText) {
+            aggregated = finalText;
+          }
+        } else if (type === 'response.error' || type === 'transcript.error') {
+          const message =
+            typeof (event as any)?.error?.message === 'string'
+              ? (event as any).error.message
+              : 'We could not transcribe that audio. Please try again.';
+          hasError = true;
+          sendEvent('error', { message });
+        }
+      }
+
+      if (!hasError) {
+        sendEvent('done', { text: aggregated });
+      }
+    } catch (error: any) {
+      this.logger.error('Failed to stream audio transcription', error);
+      if (!res.writableEnded) {
+        hasError = true;
+        const message =
+          error?.message && typeof error.message === 'string'
+            ? error.message
+            : 'We could not transcribe that audio. Please try again.';
+        sendEvent('error', { message });
+      }
+    } finally {
+      cleanup();
+      if (!res.writableEnded) {
+        res.end();
+      }
+    }
   }
 
   async generateWritingDeskFollowUps(userId: string | null | undefined, input: WritingDeskIntakeDto) {
