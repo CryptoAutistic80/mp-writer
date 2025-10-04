@@ -1133,6 +1133,53 @@ body {
   border-color: var(--blue);
   box-shadow: 0 0 0 3px var(--ring);
 }
+.voice-input {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.voice-input__textarea {
+  flex: 1;
+  min-height: 100%;
+}
+.voice-input__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: var(--blue);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+.voice-input__button:hover {
+  transform: translateY(-1px);
+}
+.voice-input__button[aria-pressed='true'] {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+}
+.voice-input__button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+.voice-input__status {
+  margin-top: 6px;
+  font-size: 0.875rem;
+  color: var(--ink-600);
+}
+.voice-input__status--error {
+  color: #b91c1c;
+}
 .select {
   appearance: none;
   border: 1px solid #e5e7eb;

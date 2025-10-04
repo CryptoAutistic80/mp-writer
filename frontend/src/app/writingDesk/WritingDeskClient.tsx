@@ -6,6 +6,7 @@ import ActiveJobResumeModal from '../../features/writing-desk/components/ActiveJ
 import EditIntakeConfirmModal from '../../features/writing-desk/components/EditIntakeConfirmModal';
 import StartOverConfirmModal from '../../features/writing-desk/components/StartOverConfirmModal';
 import { useActiveWritingDeskJob } from '../../features/writing-desk/hooks/useActiveWritingDeskJob';
+import { useVoiceRecorder } from '../../features/writing-desk/hooks/useVoiceRecorder';
 import {
   ActiveWritingDeskJob,
   UpsertActiveWritingDeskJobPayload,
@@ -135,6 +136,32 @@ const createLetterRunId = () => {
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
+
+const MicrophoneIcon = ({ active }: { active: boolean }) => (
+  <svg
+    aria-hidden
+    focusable="false"
+    width="18"
+    height="18"
+    viewBox="0 0 24 24"
+    role="img"
+  >
+    <path
+      d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z"
+      fill="currentColor"
+      opacity={active ? 1 : 0.85}
+    />
+    <path
+      d="M7 11a5 5 0 0010 0M12 19v-3"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.5}
+      opacity={active ? 1 : 0.85}
+    />
+  </svg>
+);
 
 const extractReasoningSummary = (value: unknown): string | null => {
   if (typeof value === 'string') {
@@ -285,6 +312,78 @@ export default function WritingDeskClient() {
   const [letterPendingAutoResume, setLetterPendingAutoResume] = useState(false);
   const letterSourceRef = useRef<EventSource | null>(null);
   const letterJsonBufferRef = useRef<string>('');
+
+  const ensurePersistence = useCallback(() => {
+    setPersistenceEnabled((prev) => (prev ? prev : true));
+  }, []);
+
+  const getIssueDescriptionValue = useCallback(() => form.issueDescription, [form.issueDescription]);
+
+  const applyIssueDescriptionFromVoice = useCallback(
+    (value: string) => {
+      ensurePersistence();
+      setForm((prev) => ({ ...prev, issueDescription: value }));
+    },
+    [ensurePersistence],
+  );
+
+  const {
+    status: initialVoiceStatus,
+    error: initialVoiceError,
+    start: startInitialVoice,
+    stop: stopInitialVoice,
+    cancel: cancelInitialVoice,
+  } = useVoiceRecorder({
+    getCurrentValue: getIssueDescriptionValue,
+    onUpdate: applyIssueDescriptionFromVoice,
+  });
+
+  const getFollowUpValue = useCallback(
+    () => followUpAnswers[followUpIndex] ?? '',
+    [followUpAnswers, followUpIndex],
+  );
+
+  const applyFollowUpFromVoice = useCallback(
+    (value: string) => {
+      ensurePersistence();
+      setFollowUpAnswers((prev) => {
+        const next = [...prev];
+        if (followUpIndex < 0 || followUpIndex >= next.length) {
+          return next;
+        }
+        next[followUpIndex] = value;
+        return next;
+      });
+    },
+    [ensurePersistence, followUpIndex],
+  );
+
+  const {
+    status: followUpVoiceStatus,
+    error: followUpVoiceError,
+    start: startFollowUpVoice,
+    stop: stopFollowUpVoice,
+    cancel: cancelFollowUpVoice,
+  } = useVoiceRecorder({
+    getCurrentValue: getFollowUpValue,
+    onUpdate: applyFollowUpFromVoice,
+  });
+
+  useEffect(() => {
+    if (phase !== 'initial') {
+      cancelInitialVoice();
+    }
+  }, [cancelInitialVoice, phase]);
+
+  useEffect(() => {
+    if (phase !== 'followup') {
+      cancelFollowUpVoice();
+    }
+  }, [cancelFollowUpVoice, phase]);
+
+  useEffect(() => {
+    cancelFollowUpVoice();
+  }, [cancelFollowUpVoice, followUpIndex]);
 
   const currentStep = phase === 'initial' ? steps[stepIndex] ?? null : null;
   const followUpCreditCost = 0.1;
@@ -1179,7 +1278,7 @@ export default function WritingDeskClient() {
 
   const handleInitialChange = (value: string) => {
     if (!currentStep) return;
-    if (!persistenceEnabled) setPersistenceEnabled(true);
+    ensurePersistence();
     setForm((prev) => ({ ...prev, [currentStep.key]: value }));
   };
 
@@ -1345,6 +1444,7 @@ export default function WritingDeskClient() {
   );
 
   const handleInitialNext = async () => {
+    cancelInitialVoice();
     if (!currentStep) return;
     const value = form[currentStep.key].trim();
     if (!value) {
@@ -1369,7 +1469,7 @@ export default function WritingDeskClient() {
   };
 
   const handleFollowUpChange = (value: string) => {
-    if (!persistenceEnabled) setPersistenceEnabled(true);
+    ensurePersistence();
     setFollowUpAnswers((prev) => {
       const next = [...prev];
       next[followUpIndex] = value;
@@ -1378,6 +1478,7 @@ export default function WritingDeskClient() {
   };
 
   const handleFollowUpBack = () => {
+    cancelFollowUpVoice();
     setServerError(null);
     setError(null);
     if (followUpIndex === 0) {
@@ -1389,6 +1490,7 @@ export default function WritingDeskClient() {
   };
 
   const handleFollowUpNext = async () => {
+    cancelFollowUpVoice();
     const answer = followUpAnswers[followUpIndex]?.trim?.() ?? '';
     if (!answer) {
       setError('Please answer this question before continuing.');
@@ -1593,16 +1695,53 @@ export default function WritingDeskClient() {
             <div className="field">
               <label htmlFor={`writing-step-${currentStep.key}`} className="label">{currentStep.title}</label>
               <p className="label-sub">{currentStep.description}</p>
-              <textarea
-                id={`writing-step-${currentStep.key}`}
-                className="input"
-                rows={6}
-                value={form[currentStep.key]}
-                onChange={(e) => handleInitialChange(e.target.value)}
-                placeholder={currentStep.placeholder}
-                aria-invalid={!!error && !form[currentStep.key].trim()}
-                disabled={loading}
-              />
+              <div className="voice-input">
+                <textarea
+                  id={`writing-step-${currentStep.key}`}
+                  className="input voice-input__textarea"
+                  rows={6}
+                  value={form[currentStep.key]}
+                  onChange={(e) => handleInitialChange(e.target.value)}
+                  placeholder={currentStep.placeholder}
+                  aria-invalid={!!error && !form[currentStep.key].trim()}
+                  disabled={loading}
+                />
+                <button
+                  type="button"
+                  className="voice-input__button"
+                  onClick={() => {
+                    if (initialVoiceStatus === 'recording') {
+                      stopInitialVoice();
+                    } else if (initialVoiceStatus === 'idle') {
+                      void startInitialVoice();
+                    }
+                  }}
+                  aria-pressed={initialVoiceStatus === 'recording'}
+                  aria-label={
+                    initialVoiceStatus === 'recording'
+                      ? 'Stop recording your answer'
+                      : 'Record your answer using the microphone'
+                  }
+                  title={
+                    initialVoiceStatus === 'recording'
+                      ? 'Stop recording'
+                      : 'Record your answer with your microphone'
+                  }
+                  disabled={loading || initialVoiceStatus === 'transcribing'}
+                >
+                  <MicrophoneIcon active={initialVoiceStatus === 'recording'} />
+                </button>
+              </div>
+              {initialVoiceStatus !== 'idle' && !initialVoiceError && (
+                <p className="voice-input__status" role="status">
+                  {initialVoiceStatus === 'recording'
+                    ? 'Recording… tap the microphone to finish.'
+                    : 'Transcribing your message…'}
+                </p>
+              )}
+              {initialVoiceError && (
+                <p className="voice-input__status voice-input__status--error" role="alert">{initialVoiceError}</p>
+              )}
             </div>
 
             {error && (
@@ -1694,16 +1833,53 @@ export default function WritingDeskClient() {
             <div className="field">
               <label htmlFor={`followup-${followUpIndex}`} className="label">Follow-up question {followUpIndex + 1} of {followUps.length}</label>
               <p className="label-sub">{followUps[followUpIndex]}</p>
-              <textarea
-                id={`followup-${followUpIndex}`}
-                className="input"
-                rows={5}
-                value={followUpAnswers[followUpIndex] ?? ''}
-                onChange={(e) => handleFollowUpChange(e.target.value)}
-                placeholder="Type your answer here"
-                aria-invalid={!!error && !(followUpAnswers[followUpIndex]?.trim?.())}
-                disabled={loading}
-              />
+              <div className="voice-input">
+                <textarea
+                  id={`followup-${followUpIndex}`}
+                  className="input voice-input__textarea"
+                  rows={5}
+                  value={followUpAnswers[followUpIndex] ?? ''}
+                  onChange={(e) => handleFollowUpChange(e.target.value)}
+                  placeholder="Type your answer here"
+                  aria-invalid={!!error && !(followUpAnswers[followUpIndex]?.trim?.())}
+                  disabled={loading}
+                />
+                <button
+                  type="button"
+                  className="voice-input__button"
+                  onClick={() => {
+                    if (followUpVoiceStatus === 'recording') {
+                      stopFollowUpVoice();
+                    } else if (followUpVoiceStatus === 'idle') {
+                      void startFollowUpVoice();
+                    }
+                  }}
+                  aria-pressed={followUpVoiceStatus === 'recording'}
+                  aria-label={
+                    followUpVoiceStatus === 'recording'
+                      ? 'Stop recording your answer'
+                      : 'Record your answer using the microphone'
+                  }
+                  title={
+                    followUpVoiceStatus === 'recording'
+                      ? 'Stop recording'
+                      : 'Record your answer with your microphone'
+                  }
+                  disabled={loading || followUpVoiceStatus === 'transcribing'}
+                >
+                  <MicrophoneIcon active={followUpVoiceStatus === 'recording'} />
+                </button>
+              </div>
+              {followUpVoiceStatus !== 'idle' && !followUpVoiceError && (
+                <p className="voice-input__status" role="status">
+                  {followUpVoiceStatus === 'recording'
+                    ? 'Recording… tap the microphone to finish.'
+                    : 'Transcribing your message…'}
+                </p>
+              )}
+              {followUpVoiceError && (
+                <p className="voice-input__status voice-input__status--error" role="alert">{followUpVoiceError}</p>
+              )}
             </div>
 
             {notes && followUpIndex === 0 && (
