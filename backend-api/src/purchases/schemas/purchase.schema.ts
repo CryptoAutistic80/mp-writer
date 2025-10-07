@@ -21,11 +21,32 @@ export class Purchase {
   @Prop({ required: true })
   plan!: string;
 
+  @Prop({ required: true })
+  credits!: number;
+
   @Prop({ required: true, default: 'pending' })
   status!: PurchaseStatus;
 
   @Prop({ type: Object })
   metadata?: Record<string, any>;
+
+  @Prop({ index: true, unique: true })
+  stripeSessionId?: string;
+
+  @Prop()
+  stripePaymentIntentId?: string;
+
+  @Prop()
+  stripeCustomerId?: string;
+
+  @Prop()
+  completedAt?: Date;
+
+  @Prop()
+  failureCode?: string;
+
+  @Prop()
+  failureMessage?: string;
 }
 
 export const PurchaseSchema = SchemaFactory.createForClass(Purchase);

@@ -39,6 +39,9 @@ function validateConfig(config: Record<string, unknown>) {
 
   requireString('MONGO_URI');
   requireString('JWT_SECRET', { minLength: 32, forbid: ['changeme'] });
+  requireString('STRIPE_SECRET_KEY');
+  requireString('STRIPE_PUBLISHABLE_KEY');
+  requireString('STRIPE_WEBHOOK_SECRET');
 
   const dek = config.DATA_ENCRYPTION_KEY;
   if (typeof dek !== 'string' || dek.trim().length === 0) {

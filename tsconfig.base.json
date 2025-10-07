@@ -15,7 +15,8 @@
     "skipDefaultLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@mp-writer/nest-modules": ["nest-modules/src/index.ts"]
+      "@mp-writer/nest-modules": ["nest-modules/src/index.ts"],
+      "@mp-writer/shared/credit-packages": ["shared/credit-packages.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]
