@@ -19,6 +19,7 @@ import { UserAddressModule } from '../user-address-store/user-address.module';
 import { UserCreditsModule } from '../user-credits/user-credits.module';
 import { EncryptionService } from '../crypto/encryption.service';
 import { WritingDeskJobsModule } from '../writing-desk-jobs/writing-desk-jobs.module';
+import { StripeModule } from '../payments/stripe/stripe.module';
 
 function validateConfig(config: Record<string, unknown>) {
   const errors: string[] = [];
@@ -39,6 +40,9 @@ function validateConfig(config: Record<string, unknown>) {
 
   requireString('MONGO_URI');
   requireString('JWT_SECRET', { minLength: 32, forbid: ['changeme'] });
+  requireString('STRIPE_SECRET_KEY');
+  requireString('STRIPE_PUBLISHABLE_KEY');
+  requireString('STRIPE_WEBHOOK_SECRET');
 
   const dek = config.DATA_ENCRYPTION_KEY;
   if (typeof dek !== 'string' || dek.trim().length === 0) {
@@ -89,6 +93,7 @@ function validateConfig(config: Record<string, unknown>) {
     AddressesModule,
     UserAddressModule,
     UserCreditsModule,
+    StripeModule,
     WritingDeskJobsModule,
   ],
   controllers: [AppController, HealthController],

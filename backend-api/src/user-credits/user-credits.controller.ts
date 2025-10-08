@@ -4,6 +4,8 @@ import { UserCreditsService } from './user-credits.service';
 import { UpsertUserCreditsDto } from './dto/upsert-user-credits.dto';
 import { AdjustUserCreditsDto } from './dto/adjust-user-credits.dto';
 import { ConfigService } from '@nestjs/config';
+import { StripeService } from '../payments/stripe/stripe.service';
+import { StartCheckoutDto } from './dto/start-checkout.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('user/credits')
@@ -11,6 +13,7 @@ export class UserCreditsController {
   constructor(
     private readonly userCredits: UserCreditsService,
     private readonly config: ConfigService,
+    private readonly stripe: StripeService,
   ) {}
 
   private assertMutationAllowed() {
@@ -26,6 +29,11 @@ export class UserCreditsController {
     return this.userCredits.getMine(req.user.id);
   }
 
+  @Get('packages')
+  async listPackages() {
+    return { packages: this.stripe.getCreditPackages() };
+  }
+
   @Put()
   async setMine(@Req() req: any, @Body() body: UpsertUserCreditsDto) {
     this.assertMutationAllowed();
@@ -36,6 +44,11 @@ export class UserCreditsController {
   async add(@Req() req: any, @Body() body: AdjustUserCreditsDto) {
     this.assertMutationAllowed();
     return this.userCredits.addToMine(req.user.id, body.amount);
+  }
+
+  @Post('checkout')
+  async checkout(@Req() req: any, @Body() body: StartCheckoutDto) {
+    return this.stripe.createCheckoutSession(req.user.id, body.packageId);
   }
 
   @Post('deduct')

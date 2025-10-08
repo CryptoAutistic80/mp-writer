@@ -13,7 +13,15 @@ export class CreatePurchaseDto {
   @IsOptional()
   currency?: string = 'usd';
 
+  @IsInt()
+  @IsPositive()
+  credits!: number;
+
   @IsOptional()
   metadata?: Record<string, any>;
+
+  @IsOptional()
+  @IsIn(['pending', 'succeeded', 'failed', 'refunded'])
+  status?: 'pending' | 'succeeded' | 'failed' | 'refunded';
 }
 

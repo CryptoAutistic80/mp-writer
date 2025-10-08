@@ -15,7 +15,16 @@ async function bootstrap() {
   app.setGlobalPrefix(globalPrefix);
   
   // Increase payload size limit for audio transcription
-  app.use(json({ limit: '10mb' }));
+  app.use(
+    json({
+      limit: '10mb',
+      verify: (req: any, res, buf) => {
+        if (req.originalUrl === '/api/stripe/webhook') {
+          req.rawBody = Buffer.from(buf);
+        }
+      },
+    })
+  );
   app.use(urlencoded({ extended: true, limit: '10mb' }));
   
   app.useGlobalPipes(

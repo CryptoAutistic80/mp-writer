@@ -1,43 +1,84 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { loadStripe } from '@stripe/stripe-js';
 
-type CreditState = {
-  credits: number | null;
-  status: 'idle' | 'loading' | 'success' | 'error';
-  message: string | null;
-  pendingCredits: number | null;
+type CreditPackage = {
+  id: string;
+  name: string;
+  description: string;
+  credits: number;
+  amount: number;
+  currency: string;
 };
 
-const DEALS = [
-  { credits: 3, price: 2.99 },
-  { credits: 5, price: 4.99 },
-  { credits: 10, price: 9.99 },
-];
+type CreditShopState = {
+  credits: number | null;
+  packages: CreditPackage[];
+  status: 'idle' | 'loading' | 'error';
+  message: string | null;
+  pendingPackageId: string | null;
+  fetching: boolean;
+};
 
-const currencyFormatter = new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' });
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? '');
 
 export default function CreditShopPage() {
-  const [state, setState] = useState<CreditState>({
+  const [state, setState] = useState<CreditShopState>({
     credits: null,
+    packages: [],
     status: 'idle',
     message: null,
-    pendingCredits: null,
+    pendingPackageId: null,
+    fetching: true,
   });
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/user/credits', { cache: 'no-store' });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled && typeof data?.credits === 'number') {
-          setState((prev) => ({ ...prev, credits: data.credits }));
+        const [creditsRes, packagesRes] = await Promise.all([
+          fetch('/api/user/credits', { cache: 'no-store' }),
+          fetch('/api/user/credits/packages', { cache: 'no-store' }),
+        ]);
+
+        let credits: number | null = null;
+        if (creditsRes.ok) {
+          const creditData = await creditsRes.json();
+          if (typeof creditData?.credits === 'number') {
+            credits = Math.round(creditData.credits * 100) / 100;
+          }
+        }
+
+        let packages: CreditPackage[] = [];
+        if (packagesRes.ok) {
+          const packageData = await packagesRes.json();
+          packages = normalisePackages(packageData?.packages);
+        }
+
+        if (!cancelled) {
+          setState((prev) => ({
+            ...prev,
+            credits,
+            packages,
+            fetching: false,
+            status: packages.length === 0 ? 'error' : 'idle',
+            message:
+              packages.length === 0
+                ? 'Credit packages are temporarily unavailable. Please check back soon.'
+                : null,
+          }));
         }
       } catch {
-        // Ignore fetch errors silently, page will still allow purchase attempts.
+        if (!cancelled) {
+          setState((prev) => ({
+            ...prev,
+            fetching: false,
+            status: 'error',
+            message: 'We were unable to load the credit packages. Please try again shortly.',
+          }));
+        }
       }
     })();
     return () => {
@@ -45,48 +86,100 @@ export default function CreditShopPage() {
     };
   }, []);
 
-  const handlePurchase = async (dealCredits: number) => {
+  const handlePurchase = async (selectedPackage: CreditPackage) => {
     setState((prev) => ({
       ...prev,
       status: 'loading',
       message: null,
-      pendingCredits: dealCredits,
+      pendingPackageId: selectedPackage.id,
     }));
+
     try {
-      const res = await fetch('/api/user/credits/add', {
+      const stripe = await stripePromise;
+      if (!stripe) {
+        throw new Error('Stripe failed to initialise');
+      }
+
+      const res = await fetch('/api/user/credits/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: dealCredits }),
+        body: JSON.stringify({ packageId: selectedPackage.id }),
       });
+
       if (!res.ok) {
-        setState((prev) => ({
-          ...prev,
-          status: 'error',
-          message: 'Unable to complete your purchase right now. Please try again shortly.',
-          pendingCredits: null,
-        }));
-        return;
+        throw new Error('Unable to start checkout session');
       }
+
       const data = await res.json();
-      setState((prev) => {
-        const credits =
-          typeof data?.credits === 'number' ? data.credits : prevCreditsAfterPurchase(prev.credits, dealCredits);
-        return {
-          credits,
-          status: 'success',
-          message: `Success! ${dealCredits} credits have been added to your account.`,
-          pendingCredits: null,
-        };
-      });
-    } catch {
+      const sessionId = typeof data?.sessionId === 'string' ? data.sessionId : null;
+      if (!sessionId) {
+        throw new Error('Invalid session response from server');
+      }
+
+      const { error } = await stripe.redirectToCheckout({ sessionId });
+      if (error) {
+        throw new Error(error.message || 'Stripe redirect failed');
+      }
+    } catch (error) {
       setState((prev) => ({
         ...prev,
         status: 'error',
-        message: 'Unable to complete your purchase right now. Please try again shortly.',
-        pendingCredits: null,
+        pendingPackageId: null,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unable to complete your purchase right now. Please try again shortly.',
       }));
     }
   };
+
+  const packageCards = useMemo(() => {
+    if (state.fetching) {
+      return (
+        <p style={{ margin: 0 }}>Loading packages…</p>
+      );
+    }
+
+    if (state.packages.length === 0) {
+      return (
+        <p style={{ margin: 0 }}>No credit packages are available at the moment.</p>
+      );
+    }
+
+    return state.packages.map((creditPackage) => {
+      const isProcessing =
+        state.status === 'loading' && state.pendingPackageId === creditPackage.id;
+      return (
+        <div
+          key={creditPackage.id}
+          className="card"
+          style={{
+            border: '1px solid #e2e8f0',
+            background: '#fff',
+            padding: 16,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: '1.5rem' }}>{creditPackage.credits} credits</h2>
+          <p style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600 }}>
+            {formatPrice(creditPackage)}
+          </p>
+          <p style={{ margin: 0, color: '#475569', minHeight: 48 }}>{creditPackage.description}</p>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => handlePurchase(creditPackage)}
+            disabled={state.status === 'loading'}
+            style={{ marginTop: 'auto' }}
+          >
+            {isProcessing ? 'Redirecting to checkout…' : `Buy for ${formatPrice(creditPackage)}`}
+          </button>
+        </div>
+      );
+    });
+  }, [state.fetching, state.packages, state.pendingPackageId, state.status]);
 
   return (
     <main className="hero-section">
@@ -97,7 +190,10 @@ export default function CreditShopPage() {
             <p>Purchase additional credits to continue crafting powerful letters to your MP.</p>
           </header>
           <div className="card" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-            <div className="container" style={{ display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'flex-start' }}>
+            <div
+              className="container"
+              style={{ display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'flex-start' }}
+            >
               <p style={{ textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, color: '#2563eb' }}>
                 Choose your top-up
               </p>
@@ -110,30 +206,7 @@ export default function CreditShopPage() {
                   gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
                 }}
               >
-                {DEALS.map((deal) => {
-                  const isProcessing = state.status === 'loading' && state.pendingCredits === deal.credits;
-                  return (
-                    <div
-                      key={deal.credits}
-                      className="card"
-                      style={{ border: '1px solid #e2e8f0', background: '#fff', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}
-                    >
-                      <h2 style={{ margin: 0, fontSize: '1.5rem' }}>{deal.credits} credits</h2>
-                      <p style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600 }}>
-                        {currencyFormatter.format(deal.price)}
-                      </p>
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={() => handlePurchase(deal.credits)}
-                        disabled={state.status === 'loading'}
-                        style={{ marginTop: 'auto' }}
-                      >
-                        {isProcessing ? 'Processing purchase…' : `Buy for ${currencyFormatter.format(deal.price)}`}
-                      </button>
-                    </div>
-                  );
-                })}
+                {packageCards}
               </div>
               {state.message && (
                 <p
@@ -148,11 +221,13 @@ export default function CreditShopPage() {
                 </p>
               )}
               {typeof state.credits === 'number' && (
-                <p style={{ margin: 0 }}>You now have {formatCredits(state.credits)} credits available.</p>
+                <p style={{ margin: 0 }}>You currently have {formatCredits(state.credits)} credits available.</p>
               )}
             </div>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+          <div
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}
+          >
             <Link href="/dashboard" className="btn-secondary">
               Exit shop
             </Link>
@@ -163,9 +238,40 @@ export default function CreditShopPage() {
   );
 }
 
-function prevCreditsAfterPurchase(current: number | null, delta: number) {
-  if (typeof current !== 'number') return delta;
-  return Math.round((current + delta) * 100) / 100;
+function normalisePackages(raw: unknown): CreditPackage[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((pkg) => {
+      if (
+        !pkg ||
+        typeof pkg !== 'object' ||
+        typeof (pkg as any).id !== 'string' ||
+        typeof (pkg as any).name !== 'string' ||
+        typeof (pkg as any).credits !== 'number' ||
+        typeof (pkg as any).amount !== 'number' ||
+        typeof (pkg as any).currency !== 'string'
+      ) {
+        return null;
+      }
+      return {
+        id: (pkg as any).id,
+        name: (pkg as any).name,
+        description: typeof (pkg as any).description === 'string' ? (pkg as any).description : '',
+        credits: Math.round((pkg as any).credits * 100) / 100,
+        amount: Math.round((pkg as any).amount),
+        currency: ((pkg as any).currency as string).toLowerCase(),
+      } satisfies CreditPackage;
+    })
+    .filter((pkg): pkg is CreditPackage => Boolean(pkg))
+    .sort((a, b) => a.credits - b.credits);
+}
+
+function formatPrice(creditPackage: CreditPackage) {
+  const formatter = new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency: creditPackage.currency.toUpperCase(),
+  });
+  return formatter.format(creditPackage.amount / 100);
 }
 
 function formatCredits(value: number) {

@@ -16,10 +16,11 @@ const nextConfig = {
 	nx: {
 		svgr: false,
 	},
-	env: {
-		// Expose only public variables that the browser needs
-		NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
-	},
+        env: {
+                // Expose only public variables that the browser needs
+                NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+                NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+        },
 	webpack: (config) => {
 		// Handle importing SVGs as React components using SVGR
 		config.module.rules.push({
