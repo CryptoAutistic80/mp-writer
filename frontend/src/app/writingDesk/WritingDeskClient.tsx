@@ -337,6 +337,8 @@ export default function WritingDeskClient() {
   const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
   const letterSourceRef = useRef<EventSource | null>(null);
   const letterJsonBufferRef = useRef<string>('');
+  const lastLetterEventRef = useRef<number>(0);
+  const lastLetterResumeAttemptRef = useRef<number>(0);
 
   const letterHtmlForExport = useMemo(() => {
     if (typeof letterContentHtml !== 'string' || letterContentHtml.trim().length === 0) {
@@ -833,6 +835,10 @@ ${letterDocumentBodyHtml}
       const source = new EventSource(resolvedPath, { withCredentials: true });
       letterSourceRef.current = source;
 
+      const markLetterActivity = () => {
+        lastLetterEventRef.current = Date.now();
+      };
+
       source.onmessage = (event) => {
         let payload: LetterStreamMessage | null = null;
         try {
@@ -841,6 +847,8 @@ ${letterDocumentBodyHtml}
           return;
         }
         if (!payload) return;
+
+        markLetterActivity();
 
         if (payload.type === 'status') {
           setLetterStatusMessage(payload.status);
@@ -912,13 +920,28 @@ ${letterDocumentBodyHtml}
 
       source.onerror = () => {
         closeLetterStream();
-        setLetterStatus('error');
-      setLetterPhase('error');
-      setLetterError('The letter stream disconnected. Please try again.');
-      setLetterStatusMessage(null);
-    };
-  },
-  [appendLetterEvent, closeLetterStream, setLetterMetadata, updateCreditsFromStream],
+        
+        // Check if we have substantial content that could be treated as partial success
+        const hasSubstantialContent = letterContentHtml && letterContentHtml.trim().length > 100;
+        
+        if (hasSubstantialContent && letterStatus === 'generating') {
+          // We have content and were generating - this might be a connection drop at the end
+          setLetterStatus('error');
+          setLetterPhase('error');
+          setLetterError('The connection was interrupted. The letter may be incomplete. You can try composing again or use what was generated.');
+          setLetterStatusMessage(null);
+        } else {
+          // Standard error handling
+          setLetterStatus('error');
+          setLetterPhase('error');
+          setLetterError('The letter stream disconnected. Please try again.');
+          setLetterStatusMessage(null);
+        }
+      };
+
+      lastLetterEventRef.current = Date.now();
+    },
+    [appendLetterEvent, closeLetterStream, setLetterMetadata, updateCreditsFromStream, letterContentHtml, letterStatus],
   );
 
   const beginLetterComposition = useCallback(
@@ -1009,6 +1032,36 @@ ${letterDocumentBodyHtml}
     }
     void resumeLetterComposition();
   }, [hasHandledInitialJob, letterPendingAutoResume, resumeLetterComposition]);
+
+  // Stall detection for letter stream - auto-resume if no events received
+  useEffect(() => {
+    if (letterStatus !== 'generating' || letterPhase !== 'streaming') return undefined;
+
+    const interval = window.setInterval(() => {
+      const source = letterSourceRef.current;
+      if (!source) return;
+
+      const now = Date.now();
+      const lastEventAt = lastLetterEventRef.current || 0;
+      
+      // If we haven't received events for 60 seconds, try to resume
+      if (now - lastEventAt < 60000) return;
+
+      const lastAttemptAt = lastLetterResumeAttemptRef.current || 0;
+      
+      // Don't attempt too frequently (wait at least 15 seconds between attempts)
+      if (now - lastAttemptAt < 15000) return;
+
+      lastLetterResumeAttemptRef.current = now;
+      appendLetterEvent('Connection quiet — attempting to resume the letter stream…');
+      closeLetterStream();
+      void resumeLetterComposition();
+    }, 10000); // Check every 10 seconds
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [appendLetterEvent, closeLetterStream, letterStatus, letterPhase, resumeLetterComposition]);
 
   const applySnapshot = useCallback(
     (job: ActiveWritingDeskJob) => {

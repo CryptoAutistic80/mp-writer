@@ -790,9 +790,26 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
     let remainingCredits: number | null = null;
     let controller: { abort: () => void } | null = null;
     let jsonBuffer = '';
+    let receivedCompletion = false;
+    let streamTimeout: NodeJS.Timeout | null = null;
+    const startTime = Date.now();
 
     const send = (payload: LetterStreamPayload) => {
       subject.next(payload);
+    };
+
+    const cleanup = () => {
+      if (streamTimeout) {
+        clearTimeout(streamTimeout);
+        streamTimeout = null;
+      }
+      if (controller) {
+        try {
+          controller.abort();
+        } catch {
+          // ignore
+        }
+      }
     };
 
     try {
@@ -811,6 +828,10 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       });
 
       send({ type: 'status', status: 'Composing your letter…', remainingCredits });
+
+      this.logger.log(
+        `[letter-stream] Starting letter generation for user ${userId}, job ${baselineJob.jobId}, tone ${tone}`,
+      );
 
       const apiKey = this.config.get<string>('OPENAI_API_KEY');
       const model = this.config.get<string>('OPENAI_LETTER_MODEL')?.trim() || 'gpt-5';
@@ -895,6 +916,18 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
 
       controller = stream.controller ?? null;
 
+      // Set a timeout for the entire stream (5 minutes)
+      streamTimeout = setTimeout(() => {
+        this.logger.warn(
+          `[letter-stream] Stream timeout exceeded for user ${userId}, job ${baselineJob.jobId} after 5 minutes`,
+        );
+        if (controller) {
+          controller.abort();
+        }
+      }, 5 * 60 * 1000);
+
+      this.logger.log(`[letter-stream] Beginning stream iteration for user ${userId}, job ${baselineJob.jobId}`);
+
       for await (const event of stream) {
         const normalised = this.normaliseStreamEvent(event);
         const eventType = typeof normalised.type === 'string' ? normalised.type : null;
@@ -968,9 +1001,11 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         }
 
         if (eventType === 'response.completed') {
+          receivedCompletion = true;
           const responseId = (normalised as any)?.response?.id ?? null;
           run.responseId = typeof responseId === 'string' ? responseId : null;
           const usage = (normalised as any)?.response?.usage ?? null;
+          const duration = Date.now() - startTime;
           this.logger.log(
             `[writing-desk letter-usage] ${JSON.stringify({
               userId,
@@ -979,6 +1014,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
               tone,
               responseId: run.responseId,
               usage,
+              durationMs: duration,
             })}`,
           );
           const finalText = this.extractFirstText((normalised as any)?.response) ?? jsonBuffer;
@@ -1033,7 +1069,9 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
             ),
             remainingCredits,
           });
+          cleanup();
           subject.complete();
+          this.logger.log(`[letter-stream] Completed successfully for user ${userId}, job ${baselineJob.jobId}`);
           return;
         }
 
@@ -1042,12 +1080,100 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
             typeof (normalised as any)?.error?.message === 'string'
               ? ((normalised as any).error.message as string)
               : 'Letter composition failed. Please try again in a few moments.';
+          this.logger.error(
+            `[letter-stream] Stream error event for user ${userId}, job ${baselineJob.jobId}: ${message}`,
+          );
           throw new Error(message);
+        }
+      }
+
+      // Stream ended without receiving a completion event
+      this.logger.warn(
+        `[letter-stream] Stream ended without completion event for user ${userId}, job ${baselineJob.jobId}. ` +
+        `ReceivedCompletion: ${receivedCompletion}, BufferLength: ${jsonBuffer.length}`,
+      );
+
+      // If we have substantial content in the buffer, try to parse and return it
+      if (jsonBuffer.length > 100) {
+        this.logger.log(
+          `[letter-stream] Attempting to parse partial content for user ${userId}, job ${baselineJob.jobId}`,
+        );
+        try {
+          const parsed = this.parseLetterResult(jsonBuffer);
+          const merged = this.mergeLetterResultWithContext(parsed, context);
+          
+          // Check if we got enough of the letter to be useful
+          if (merged.letter_content && merged.letter_content.trim().length > 50) {
+            const references = Array.isArray(merged.references) 
+              ? merged.references.map((ref) => {
+                  try {
+                    return decodeURIComponent(ref);
+                  } catch {
+                    return ref;
+                  }
+                })
+              : [];
+            const finalDocument = this.buildLetterDocumentHtml({
+              mpName: merged.mp_name,
+              mpAddress1: merged.mp_address_1,
+              mpAddress2: merged.mp_address_2,
+              mpCity: merged.mp_city,
+              mpCounty: merged.mp_county,
+              mpPostcode: merged.mp_postcode,
+              date: merged.date,
+              subjectLineHtml: merged.subject_line_html,
+              letterContentHtml: merged.letter_content,
+              senderName: merged.sender_name,
+              senderAddress1: merged.sender_address_1,
+              senderAddress2: merged.sender_address_2,
+              senderAddress3: merged.sender_address_3,
+              senderCity: merged.sender_city,
+              senderCounty: merged.sender_county,
+              senderPostcode: merged.sender_postcode,
+              senderTelephone: merged.sender_phone,
+              references,
+            });
+
+            await this.persistLetterResult(userId, baselineJob, {
+              status: 'completed',
+              tone,
+              responseId: run.responseId,
+              content: finalDocument,
+              references,
+              json: jsonBuffer,
+            });
+
+            run.status = 'completed';
+            send({ type: 'letter_delta', html: finalDocument });
+            send({
+              type: 'complete',
+              letter: this.toLetterCompletePayload(
+                { ...merged, letter_content: finalDocument },
+                { responseId: run.responseId, tone, rawJson: jsonBuffer },
+              ),
+              remainingCredits,
+            });
+            cleanup();
+            subject.complete();
+            this.logger.log(
+              `[letter-stream] Recovered partial completion for user ${userId}, job ${baselineJob.jobId}`,
+            );
+            return;
+          }
+        } catch (parseError) {
+          this.logger.warn(
+            `[letter-stream] Failed to parse partial content for user ${userId}: ${(parseError as Error)?.message}`,
+          );
         }
       }
 
       throw new Error('Letter composition ended unexpectedly. Please try again in a few moments.');
     } catch (error) {
+      const duration = Date.now() - startTime;
+      this.logger.error(
+        `[letter-stream] Error after ${duration}ms for user ${userId}, job ${baselineJob.jobId}: ${(error as Error)?.message ?? error}`,
+      );
+
       if (deductionApplied) {
         await this.refundCredits(userId, LETTER_CREDIT_COST);
         if (typeof remainingCredits === 'number') {
@@ -1070,17 +1196,19 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           ? error.message
           : 'Letter composition failed. Please try again in a few moments.';
 
-      send({ type: 'error', message, remainingCredits });
+      // Always send error message before completing the subject
+      try {
+        send({ type: 'error', message, remainingCredits });
+      } catch (sendError) {
+        this.logger.error(
+          `[letter-stream] Failed to send error message for user ${userId}: ${(sendError as Error)?.message}`,
+        );
+      }
+      
+      cleanup();
       subject.complete();
     } finally {
-      if (controller) {
-        try {
-          controller.abort();
-        } catch {
-          // ignore
-        }
-      }
-
+      cleanup();
       this.scheduleLetterRunCleanup(run);
     }
   }
