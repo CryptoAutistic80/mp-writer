@@ -23,20 +23,20 @@ export class WritingDeskJobsRepository {
       phase: WritingDeskJobPhase;
       stepIndex: number;
       followUpIndex: number;
-      followUpQuestions: string[];
+      followUpQuestionsCiphertext: string;
       formCiphertext: string;
       followUpAnswersCiphertext: string;
-      notes: string | null;
+      notesCiphertext: string;
       responseId: string | null;
-      researchContent: string | null;
+      researchContentCiphertext: string;
       researchResponseId: string | null;
       researchStatus: string;
       letterStatus: string;
       letterTone: string | null;
       letterResponseId: string | null;
-      letterContent: string | null;
-      letterReferences: string[];
-      letterJson: string | null;
+      letterContentCiphertext: string;
+      letterReferencesCiphertext: string;
+      letterJsonCiphertext: string;
     },
   ): Promise<WritingDeskJobRecord> {
     const doc = await this.model
@@ -47,7 +47,16 @@ export class WritingDeskJobsRepository {
             ...payload,
             userId,
           },
-          $unset: { form: '', followUpAnswers: '' },
+          $unset: { 
+            form: '', 
+            followUpAnswers: '', 
+            followUpQuestions: '', 
+            notes: '', 
+            researchContent: '', 
+            letterContent: '', 
+            letterReferences: '', 
+            letterJson: '' 
+          },
         },
         { new: true, upsert: true, setDefaultsOnInsert: true }
       )

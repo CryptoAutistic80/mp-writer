@@ -22,20 +22,29 @@ export class WritingDeskJob {
   @Prop({ type: String, required: true })
   formCiphertext!: string;
 
+  @Prop({ type: String, required: true })
+  followUpQuestionsCiphertext!: string;
+
   @Prop({ type: [String], default: [] })
-  followUpQuestions!: string[];
+  followUpQuestions!: string[]; // Legacy field for backward compatibility
 
   @Prop({ type: String, required: true })
   followUpAnswersCiphertext!: string;
 
+  @Prop({ type: String, required: true })
+  notesCiphertext!: string;
+
   @Prop({ type: String, default: null })
-  notes!: string | null;
+  notes!: string | null; // Legacy field for backward compatibility
 
   @Prop({ type: String, default: null })
   responseId!: string | null;
 
+  @Prop({ type: String, required: true })
+  researchContentCiphertext!: string;
+
   @Prop({ type: String, default: null })
-  researchContent!: string | null;
+  researchContent!: string | null; // Legacy field for backward compatibility
 
   @Prop({ type: String, default: null })
   researchResponseId!: string | null;
@@ -52,14 +61,23 @@ export class WritingDeskJob {
   @Prop({ type: String, default: null })
   letterResponseId!: string | null;
 
+  @Prop({ type: String, required: true })
+  letterContentCiphertext!: string;
+
   @Prop({ type: String, default: null })
-  letterContent!: string | null;
+  letterContent!: string | null; // Legacy field for backward compatibility
+
+  @Prop({ type: String, required: true })
+  letterReferencesCiphertext!: string;
 
   @Prop({ type: [String], default: [] })
-  letterReferences!: string[];
+  letterReferences!: string[]; // Legacy field for backward compatibility
+
+  @Prop({ type: String, required: true })
+  letterJsonCiphertext!: string;
 
   @Prop({ type: String, default: null })
-  letterJson!: string | null;
+  letterJson!: string | null; // Legacy field for backward compatibility
 }
 
 export type WritingDeskJobDocument = WritingDeskJob & Document;
