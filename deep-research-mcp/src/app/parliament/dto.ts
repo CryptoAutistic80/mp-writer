@@ -1,13 +1,17 @@
 import { Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   Matches,
   MaxLength,
+  Min,
 } from 'class-validator';
 
 type TrimmedString = string;
@@ -15,7 +19,39 @@ type TrimmedString = string;
 const trim = ({ value }: { value: TrimmedString }) =>
   typeof value === 'string' ? value.trim() : value;
 
-export class CoreDatasetQueryDto {
+const toBoolean = ({ value }: { value: unknown }) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    return value.toLowerCase() === 'true' || value === '1';
+  }
+  return Boolean(value);
+};
+
+export class SearchOptionsDto {
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  enableCache?: boolean;
+
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  fuzzyMatch?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  relevanceThreshold?: number;
+
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  applyRelevance?: boolean;
+}
+
+export class CoreDatasetQueryDto extends SearchOptionsDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(128)
@@ -46,7 +82,7 @@ export enum ParliamentaryHouse {
   Lords = 'lords',
 }
 
-export class BillSearchDto {
+export class BillSearchDto extends SearchOptionsDto {
   @IsOptional()
   @IsString()
   @MaxLength(256)
@@ -70,7 +106,7 @@ export class BillSearchDto {
   parliamentNumber?: number;
 }
 
-export class HistoricHansardQueryDto {
+export class HistoricHansardQueryDto extends SearchOptionsDto {
   @IsEnum(ParliamentaryHouse)
   house!: ParliamentaryHouse;
 
@@ -92,7 +128,7 @@ export enum LegislationDocumentType {
   Nisi = 'nisi',
 }
 
-export class LegislationSearchDto {
+export class LegislationSearchDto extends SearchOptionsDto {
   @IsOptional()
   @IsString()
   @MaxLength(256)
