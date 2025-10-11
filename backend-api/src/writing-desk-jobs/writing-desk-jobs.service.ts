@@ -42,20 +42,20 @@ export class WritingDeskJobsService {
       phase: sanitized.phase,
       stepIndex: sanitized.stepIndex,
       followUpIndex: sanitized.followUpIndex,
-      followUpQuestions: sanitized.followUpQuestions,
+      followUpQuestionsCiphertext: this.encryption.encryptObject(sanitized.followUpQuestions),
       formCiphertext: this.encryption.encryptObject(sanitized.form),
       followUpAnswersCiphertext: this.encryption.encryptObject(sanitized.followUpAnswers),
-      notes: sanitized.notes,
+      notesCiphertext: this.encryption.encryptObject(sanitized.notes),
       responseId: sanitized.responseId,
-      researchContent: sanitized.researchContent,
+      researchContentCiphertext: this.encryption.encryptObject(sanitized.researchContent),
       researchResponseId: sanitized.researchResponseId,
       researchStatus: sanitized.researchStatus,
       letterStatus: sanitized.letterStatus,
       letterTone: sanitized.letterTone,
       letterResponseId: sanitized.letterResponseId,
-      letterContent: sanitized.letterContent,
-      letterReferences: sanitized.letterReferences,
-      letterJson: sanitized.letterJson,
+      letterContentCiphertext: this.encryption.encryptObject(sanitized.letterContent),
+      letterReferencesCiphertext: this.encryption.encryptObject(sanitized.letterReferences),
+      letterJsonCiphertext: this.encryption.encryptObject(sanitized.letterJson),
     };
 
     const saved = await this.repository.upsertActiveJob(userId, payload);
@@ -157,7 +157,13 @@ export class WritingDeskJobsService {
 
   private toSnapshot(record: WritingDeskJobRecord): WritingDeskJobSnapshot {
     const form = this.decryptForm(record);
+    const followUpQuestions = this.decryptFollowUpQuestions(record);
     const followUpAnswers = this.decryptFollowUpAnswers(record);
+    const notes = this.decryptNotes(record);
+    const researchContent = this.decryptResearchContent(record);
+    const letterContent = this.decryptLetterContent(record);
+    const letterReferences = this.decryptLetterReferences(record);
+    const letterJson = this.decryptLetterJson(record);
 
     const createdAt = record.createdAt instanceof Date ? record.createdAt : new Date(record.createdAt);
     const updatedAt = record.updatedAt instanceof Date ? record.updatedAt : new Date(record.updatedAt);
@@ -169,21 +175,19 @@ export class WritingDeskJobsService {
       stepIndex: record.stepIndex,
       followUpIndex: record.followUpIndex,
       form,
-      followUpQuestions: record.followUpQuestions ?? [],
+      followUpQuestions,
       followUpAnswers,
-      notes: record.notes ?? null,
+      notes,
       responseId: record.responseId ?? null,
-      researchContent: record.researchContent ?? null,
+      researchContent,
       researchResponseId: record.researchResponseId ?? null,
       researchStatus: (record as any)?.researchStatus ?? 'idle',
       letterStatus: (record as any)?.letterStatus ?? 'idle',
       letterTone: (record as any)?.letterTone ?? null,
       letterResponseId: (record as any)?.letterResponseId ?? null,
-      letterContent: record.letterContent ?? null,
-      letterReferences: Array.isArray((record as any)?.letterReferences)
-        ? ((record as any).letterReferences as string[])
-        : [],
-      letterJson: (record as any)?.letterJson ?? null,
+      letterContent,
+      letterReferences,
+      letterJson,
       createdAt,
       updatedAt,
     };
@@ -242,6 +246,96 @@ export class WritingDeskJobsService {
     }
 
     return [];
+  }
+
+  private decryptFollowUpQuestions(record: WritingDeskJobRecord): string[] {
+    if ((record as any).followUpQuestionsCiphertext) {
+      try {
+        const decrypted = this.encryption.decryptObject<string[]>((record as any).followUpQuestionsCiphertext);
+        if (Array.isArray(decrypted)) {
+          return decrypted.map((value) => (typeof value === 'string' ? value : ''));
+        }
+      } catch {
+        // fall through to legacy/plain handling
+      }
+    }
+
+    if (Array.isArray(record.followUpQuestions)) {
+      return record.followUpQuestions.map((value) => (typeof value === 'string' ? value : ''));
+    }
+
+    return [];
+  }
+
+  private decryptNotes(record: WritingDeskJobRecord): string | null {
+    if ((record as any).notesCiphertext) {
+      try {
+        const decrypted = this.encryption.decryptObject<string | null>((record as any).notesCiphertext);
+        return typeof decrypted === 'string' ? decrypted : null;
+      } catch {
+        // fall through to legacy/plain handling
+      }
+    }
+
+    return record.notes ?? null;
+  }
+
+  private decryptResearchContent(record: WritingDeskJobRecord): string | null {
+    if ((record as any).researchContentCiphertext) {
+      try {
+        const decrypted = this.encryption.decryptObject<string | null>((record as any).researchContentCiphertext);
+        return typeof decrypted === 'string' ? decrypted : null;
+      } catch {
+        // fall through to legacy/plain handling
+      }
+    }
+
+    return record.researchContent ?? null;
+  }
+
+  private decryptLetterContent(record: WritingDeskJobRecord): string | null {
+    if ((record as any).letterContentCiphertext) {
+      try {
+        const decrypted = this.encryption.decryptObject<string | null>((record as any).letterContentCiphertext);
+        return typeof decrypted === 'string' ? decrypted : null;
+      } catch {
+        // fall through to legacy/plain handling
+      }
+    }
+
+    return record.letterContent ?? null;
+  }
+
+  private decryptLetterReferences(record: WritingDeskJobRecord): string[] {
+    if ((record as any).letterReferencesCiphertext) {
+      try {
+        const decrypted = this.encryption.decryptObject<string[]>((record as any).letterReferencesCiphertext);
+        if (Array.isArray(decrypted)) {
+          return decrypted.map((value) => (typeof value === 'string' ? value : ''));
+        }
+      } catch {
+        // fall through to legacy/plain handling
+      }
+    }
+
+    if (Array.isArray((record as any)?.letterReferences)) {
+      return ((record as any).letterReferences as string[]).map((value) => (typeof value === 'string' ? value : ''));
+    }
+
+    return [];
+  }
+
+  private decryptLetterJson(record: WritingDeskJobRecord): string | null {
+    if ((record as any).letterJsonCiphertext) {
+      try {
+        const decrypted = this.encryption.decryptObject<string | null>((record as any).letterJsonCiphertext);
+        return typeof decrypted === 'string' ? decrypted : null;
+      } catch {
+        // fall through to legacy/plain handling
+      }
+    }
+
+    return (record as any)?.letterJson ?? null;
   }
 
   private toResource(snapshot: WritingDeskJobSnapshot): ActiveWritingDeskJobResource {

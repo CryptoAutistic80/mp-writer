@@ -20,6 +20,7 @@ import { UserCreditsModule } from '../user-credits/user-credits.module';
 import { EncryptionService } from '../crypto/encryption.service';
 import { WritingDeskJobsModule } from '../writing-desk-jobs/writing-desk-jobs.module';
 import { CheckoutModule } from '../checkout/checkout.module';
+import { UserStoredLettersModule } from '../user-stored-letters/user-stored-letters.module';
 
 function validateConfig(config: Record<string, unknown>) {
   const errors: string[] = [];
@@ -92,6 +93,7 @@ function validateConfig(config: Record<string, unknown>) {
     UserAddressModule,
     UserCreditsModule,
     WritingDeskJobsModule,
+    UserStoredLettersModule,
   ],
   controllers: [AppController, HealthController],
   providers: [

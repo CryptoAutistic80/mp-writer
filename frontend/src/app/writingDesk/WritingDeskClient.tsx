@@ -14,6 +14,7 @@ import {
   WRITING_DESK_LETTER_TONES,
 } from '../../features/writing-desk/types';
 import { startLetterComposition } from '../../features/writing-desk/api/letter';
+import { saveStoredLetter } from '../../features/writing-desk/api/storedLetters';
 import { composeLetterHtml, letterHtmlToPlainText } from '../../features/writing-desk/utils/composeLetterHtml';
 import { MicButton } from '../../components/audio/MicButton';
 
@@ -329,6 +330,8 @@ export default function WritingDeskClient() {
   const [letterEvents, setLetterEvents] = useState<Array<{ id: string; text: string }>>([]);
   const [letterStatusMessage, setLetterStatusMessage] = useState<string | null>(null);
   const [letterCopyState, setLetterCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [letterSaveState, setLetterSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [letterSaveError, setLetterSaveError] = useState<string | null>(null);
   const [letterRemainingCredits, setLetterRemainingCredits] = useState<number | null>(null);
   const [letterReasoningVisible, setLetterReasoningVisible] = useState(true);
   const [letterMetadata, setLetterMetadata] = useState<LetterStreamLetterPayload | null>(null);
@@ -337,6 +340,8 @@ export default function WritingDeskClient() {
   const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
   const letterSourceRef = useRef<EventSource | null>(null);
   const letterJsonBufferRef = useRef<string>('');
+  const lastLetterEventRef = useRef<number>(0);
+  const lastLetterResumeAttemptRef = useRef<number>(0);
 
   const letterHtmlForExport = useMemo(() => {
     if (typeof letterContentHtml !== 'string' || letterContentHtml.trim().length === 0) {
@@ -450,6 +455,8 @@ ${letterDocumentBodyHtml}
     setLetterEvents([]);
     setLetterStatusMessage(null);
     setLetterCopyState('idle');
+    setLetterSaveState('idle');
+    setLetterSaveError(null);
     setLetterRemainingCredits(null);
     setLetterReasoningVisible(true);
     setLetterMetadata(null);
@@ -588,6 +595,8 @@ ${letterDocumentBodyHtml}
 
   useEffect(() => {
     setLetterCopyState('idle');
+    setLetterSaveState('idle');
+    setLetterSaveError(null);
   }, [letterContentHtml]);
 
   const generatingMessage = `Generating follow-up questions${'.'.repeat((ellipsisCount % 5) + 1)}`;
@@ -833,6 +842,10 @@ ${letterDocumentBodyHtml}
       const source = new EventSource(resolvedPath, { withCredentials: true });
       letterSourceRef.current = source;
 
+      const markLetterActivity = () => {
+        lastLetterEventRef.current = Date.now();
+      };
+
       source.onmessage = (event) => {
         let payload: LetterStreamMessage | null = null;
         try {
@@ -841,6 +854,8 @@ ${letterDocumentBodyHtml}
           return;
         }
         if (!payload) return;
+
+        markLetterActivity();
 
         if (payload.type === 'status') {
           setLetterStatusMessage(payload.status);
@@ -912,13 +927,28 @@ ${letterDocumentBodyHtml}
 
       source.onerror = () => {
         closeLetterStream();
-        setLetterStatus('error');
-      setLetterPhase('error');
-      setLetterError('The letter stream disconnected. Please try again.');
-      setLetterStatusMessage(null);
-    };
-  },
-  [appendLetterEvent, closeLetterStream, setLetterMetadata, updateCreditsFromStream],
+        
+        // Check if we have substantial content that could be treated as partial success
+        const hasSubstantialContent = letterContentHtml && letterContentHtml.trim().length > 100;
+        
+        if (hasSubstantialContent && letterStatus === 'generating') {
+          // We have content and were generating - this might be a connection drop at the end
+          setLetterStatus('error');
+          setLetterPhase('error');
+          setLetterError('The connection was interrupted. The letter may be incomplete. You can try composing again or use what was generated.');
+          setLetterStatusMessage(null);
+        } else {
+          // Standard error handling
+          setLetterStatus('error');
+          setLetterPhase('error');
+          setLetterError('The letter stream disconnected. Please try again.');
+          setLetterStatusMessage(null);
+        }
+      };
+
+      lastLetterEventRef.current = Date.now();
+    },
+    [appendLetterEvent, closeLetterStream, setLetterMetadata, updateCreditsFromStream, letterContentHtml, letterStatus],
   );
 
   const beginLetterComposition = useCallback(
@@ -1009,6 +1039,36 @@ ${letterDocumentBodyHtml}
     }
     void resumeLetterComposition();
   }, [hasHandledInitialJob, letterPendingAutoResume, resumeLetterComposition]);
+
+  // Stall detection for letter stream - auto-resume if no events received
+  useEffect(() => {
+    if (letterStatus !== 'generating' || letterPhase !== 'streaming') return undefined;
+
+    const interval = window.setInterval(() => {
+      const source = letterSourceRef.current;
+      if (!source) return;
+
+      const now = Date.now();
+      const lastEventAt = lastLetterEventRef.current || 0;
+      
+      // If we haven't received events for 60 seconds, try to resume
+      if (now - lastEventAt < 60000) return;
+
+      const lastAttemptAt = lastLetterResumeAttemptRef.current || 0;
+      
+      // Don't attempt too frequently (wait at least 15 seconds between attempts)
+      if (now - lastAttemptAt < 15000) return;
+
+      lastLetterResumeAttemptRef.current = now;
+      appendLetterEvent('Connection quiet — attempting to resume the letter stream…');
+      closeLetterStream();
+      void resumeLetterComposition();
+    }, 10000); // Check every 10 seconds
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [appendLetterEvent, closeLetterStream, letterStatus, letterPhase, resumeLetterComposition]);
 
   const applySnapshot = useCallback(
     (job: ActiveWritingDeskJob) => {
@@ -1655,6 +1715,71 @@ ${letterDocumentBodyHtml}
     }
   }, [letterContentHtml]);
 
+  const handleSaveLetter = useCallback(async () => {
+    if (letterSaveState === 'saving' || letterSaveState === 'saved') {
+      return;
+    }
+
+    if (!letterContentHtml || letterContentHtml.trim().length === 0) {
+      setLetterSaveState('error');
+      setLetterSaveError('There is no letter content to save yet.');
+      return;
+    }
+
+    if (!letterMetadata) {
+      setLetterSaveState('error');
+      setLetterSaveError('We could not find the letter details to save. Compose the letter again.');
+      return;
+    }
+
+    setLetterSaveState('saving');
+    setLetterSaveError(null);
+
+    const toValue = (value: string | null | undefined) => (typeof value === 'string' ? value : '');
+
+    try {
+      await saveStoredLetter({
+        letterHtml: letterContentHtml,
+        letterJson: letterRawJson ?? null,
+        jobId: jobId ?? null,
+        responseId: letterResponseId ?? null,
+        tone: selectedTone ?? null,
+        references: letterReferences,
+        metadata: {
+          mpName: toValue(letterMetadata.mpName),
+          mpAddress1: toValue(letterMetadata.mpAddress1),
+          mpAddress2: toValue(letterMetadata.mpAddress2),
+          mpCity: toValue(letterMetadata.mpCity),
+          mpCounty: toValue(letterMetadata.mpCounty),
+          mpPostcode: toValue(letterMetadata.mpPostcode),
+          date: toValue(letterMetadata.date),
+          senderName: toValue(letterMetadata.senderName),
+          senderAddress1: toValue(letterMetadata.senderAddress1),
+          senderAddress2: toValue(letterMetadata.senderAddress2),
+          senderAddress3: toValue(letterMetadata.senderAddress3),
+          senderCity: toValue(letterMetadata.senderCity),
+          senderCounty: toValue(letterMetadata.senderCounty),
+          senderPostcode: toValue(letterMetadata.senderPostcode),
+          senderTelephone: toValue(letterMetadata.senderTelephone),
+        },
+      });
+      setLetterSaveState('saved');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'We could not save your letter. Please try again.';
+      setLetterSaveState('error');
+      setLetterSaveError(message);
+    }
+  }, [
+    jobId,
+    letterContentHtml,
+    letterMetadata,
+    letterRawJson,
+    letterReferences,
+    letterResponseId,
+    letterSaveState,
+    selectedTone,
+  ]);
+
   const handleDownloadDocx = useCallback(async () => {
     if (isDownloadingDocx || typeof window === 'undefined') return;
     setIsDownloadingDocx(true);
@@ -2283,6 +2408,15 @@ ${letterDocumentBodyHtml}
                   <button
                     type="button"
                     className="btn-secondary"
+                    onClick={handleSaveLetter}
+                    disabled={letterSaveState === 'saving' || letterSaveState === 'saved'}
+                    aria-busy={letterSaveState === 'saving'}
+                  >
+                    {letterSaveState === 'saving' ? 'Saving…' : letterSaveState === 'saved' ? 'Saved!' : 'Save my letter'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
                     onClick={handleDownloadPdf}
                     disabled={isDownloadingPdf}
                     aria-busy={isDownloadingPdf}
@@ -2302,6 +2436,16 @@ ${letterDocumentBodyHtml}
                     Compose another letter
                   </button>
                 </div>
+                {letterSaveError && (
+                  <p style={{ marginTop: 8, color: '#b91c1c' }} role="alert">
+                    {letterSaveError}
+                  </p>
+                )}
+                {letterSaveState === 'saved' && !letterSaveError && (
+                  <p style={{ marginTop: 8, color: '#047857' }} role="status">
+                    Letter saved to your account.
+                  </p>
+                )}
               </div>
             )}
 
