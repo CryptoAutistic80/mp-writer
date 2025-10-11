@@ -1,4 +1,8 @@
-import { WritingDeskLetterTone } from '../writing-desk-jobs/writing-desk-jobs.types';
+import type {
+  WritingDeskLetterTone as WritingDeskLetterToneContract,
+} from '../writing-desk-jobs/writing-desk-jobs.types';
+
+export type WritingDeskLetterTone = WritingDeskLetterToneContract;
 
 export interface StoredLetterMetadata {
   mpName: string;
