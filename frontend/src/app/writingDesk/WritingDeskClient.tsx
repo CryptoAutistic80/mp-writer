@@ -9,6 +9,7 @@ import StartOverConfirmModal from '../../features/writing-desk/components/StartO
 import RecomposeConfirmModal from '../../features/writing-desk/components/RecomposeConfirmModal';
 import ResearchConfirmModal from '../../features/writing-desk/components/ResearchConfirmModal';
 import FollowUpsConfirmModal from '../../features/writing-desk/components/FollowUpsConfirmModal';
+import LetterCreationConfirmModal from '../../features/writing-desk/components/LetterCreationConfirmModal';
 import ExitWritingDeskModal from '../../features/writing-desk/components/ExitWritingDeskModal';
 import { useActiveWritingDeskJob } from '../../features/writing-desk/hooks/useActiveWritingDeskJob';
 import {
@@ -342,6 +343,7 @@ export default function WritingDeskClient() {
   const [researchConfirmOpen, setResearchConfirmOpen] = useState(false);
   const [followUpsConfirmOpen, setFollowUpsConfirmOpen] = useState(false);
   const [initialFollowUpsConfirmOpen, setInitialFollowUpsConfirmOpen] = useState(false);
+  const [letterCreationConfirmOpen, setLetterCreationConfirmOpen] = useState(false);
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
@@ -1807,6 +1809,25 @@ ${letterDocumentBodyHtml}
     setFollowUpsConfirmOpen(false);
   }, []);
 
+  const handleRequestLetterCreation = useCallback(() => {
+    setLetterCreationConfirmOpen(true);
+  }, []);
+
+  const handleConfirmLetterCreation = useCallback(() => {
+    setLetterCreationConfirmOpen(false);
+    if (letterStatus !== 'idle') {
+      resetLetter();
+    }
+    setLetterPhase('tone');
+    setLetterStatusMessage(null);
+    setLetterError(null);
+    setShowSummaryDetails(false);
+  }, [letterStatus, resetLetter]);
+
+  const handleCancelLetterCreation = useCallback(() => {
+    setLetterCreationConfirmOpen(false);
+  }, []);
+
   const handleShowToneSelection = useCallback(() => {
     if (letterStatus !== 'idle') {
       resetLetter();
@@ -2021,6 +2042,7 @@ ${letterDocumentBodyHtml}
         onConfirm={handleConfirmRecompose}
         onCancel={handleCancelRecompose}
         letterIsSaved={letterIsSaved}
+        creditCost={formatCredits(letterCreditCost)}
       />
       <EditIntakeConfirmModal
         open={editIntakeModalOpen}
@@ -2047,6 +2069,12 @@ ${letterDocumentBodyHtml}
         onConfirm={handleConfirmInitialFollowUps}
         onCancel={handleCancelInitialFollowUps}
         isInitialGeneration={true}
+      />
+      <LetterCreationConfirmModal
+        open={letterCreationConfirmOpen}
+        creditCost={formatCredits(letterCreditCost)}
+        onConfirm={handleConfirmLetterCreation}
+        onCancel={handleCancelLetterCreation}
       />
       <ActiveJobResumeModal
         open={resumeModalOpen}
@@ -2503,10 +2531,10 @@ ${letterDocumentBodyHtml}
                     <button
                       type="button"
                       className="btn-primary create-letter-button"
-                      onClick={handleShowToneSelection}
+                      onClick={handleRequestLetterCreation}
                       disabled={loading}
                     >
-                      Create my letter (costs {formatCredits(letterCreditCost)} credits)
+                      Create my letter
                     </button>
                   )}
                 </div>

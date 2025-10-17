@@ -1,19 +1,23 @@
-interface RecomposeConfirmModalProps {
+interface LetterCreationConfirmModalProps {
   open: boolean;
+  creditCost: string;
   onConfirm: () => void;
   onCancel: () => void;
-  letterIsSaved?: boolean;
-  creditCost: string;
 }
 
-export default function RecomposeConfirmModal({ open, onConfirm, onCancel, letterIsSaved, creditCost }: RecomposeConfirmModalProps) {
+export default function LetterCreationConfirmModal({
+  open,
+  creditCost,
+  onConfirm,
+  onCancel,
+}: LetterCreationConfirmModalProps) {
   if (!open) return null;
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-labelledby="recompose-confirm-title"
+      aria-labelledby="letter-creation-confirm-title"
       style={{
         position: 'fixed',
         inset: 0,
@@ -35,25 +39,19 @@ export default function RecomposeConfirmModal({ open, onConfirm, onCancel, lette
           padding: '24px 28px',
         }}
       >
-        <h2 id="recompose-confirm-title" style={{ fontSize: 24, lineHeight: 1.2, marginBottom: 12 }}>
-          Recompose this letter?
+        <h2 id="letter-creation-confirm-title" style={{ fontSize: 24, lineHeight: 1.2, marginBottom: 12 }}>
+          Create your letter?
         </h2>
-        {!letterIsSaved && (
-          <p style={{ marginBottom: 16, color: '#334155', lineHeight: 1.6 }}>
-            <strong style={{ color: '#b91c1c' }}>Heads up:</strong> You haven&apos;t saved the current draft yet. Recomposing now
-            will discard it and start a new version.
-          </p>
-        )}
         <p style={{ marginBottom: 16, color: '#334155', lineHeight: 1.6 }}>
-          <strong style={{ color: '#0369a1' }}>Cost:</strong> This will use <strong>{creditCost} credits</strong> to generate a new letter.
+          <strong style={{ color: '#0369a1' }}>Cost:</strong> This will use <strong>{creditCost} credits</strong> to compose your letter.
         </p>
-        <p style={{ marginBottom: 20, color: '#475569' }}>Do you still want to continue?</p>
+        <p style={{ marginBottom: 20, color: '#475569' }}>Ready to proceed?</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <button
             type="button"
             onClick={onConfirm}
             style={{
-              backgroundColor: '#1d4ed8',
+              backgroundColor: '#2563eb',
               color: 'white',
               border: 'none',
               borderRadius: 999,
@@ -63,7 +61,7 @@ export default function RecomposeConfirmModal({ open, onConfirm, onCancel, lette
               cursor: 'pointer',
             }}
           >
-            Yes, recompose
+            Yes, create letter
           </button>
           <button
             type="button"
@@ -79,10 +77,12 @@ export default function RecomposeConfirmModal({ open, onConfirm, onCancel, lette
               cursor: 'pointer',
             }}
           >
-            No, keep this draft
+            Cancel
           </button>
         </div>
       </div>
     </div>
   );
 }
+
+

@@ -1582,6 +1582,17 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
               case 'response.reasoning_summary_text.done':
                 send({ type: 'event', event: this.normaliseStreamEvent(event) });
                 break;
+              case 'response.mcp_list_tools.in_progress':
+              case 'response.mcp_list_tools.completed':
+              case 'response.mcp_list_tools.failed':
+                this.logMcpListToolsEvent(event, { userId, jobId: baselineJob.jobId });
+                send({ type: 'event', event: this.normaliseStreamEvent(event) });
+                break;
+              case 'response.output_item.added':
+              case 'response.output_item.done':
+                this.logMcpToolStreamEvent(event, { userId, jobId: baselineJob.jobId });
+                send({ type: 'event', event: this.normaliseStreamEvent(event) });
+                break;
               case 'response.failed':
               case 'response.incomplete': {
                 const errorMessage = (event as any)?.error?.message ?? 'Deep research failed';
@@ -2072,6 +2083,11 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       tools.push({ type: 'code_interpreter', container: { type: 'auto' } });
     }
 
+    const mcpTool = this.buildDeepResearchMcpToolConfig();
+    if (mcpTool) {
+      tools.push(mcpTool);
+    }
+
     const extras: DeepResearchRequestExtras = {};
     if (tools.length > 0) {
       extras.tools = tools;
@@ -2125,6 +2141,218 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
     };
 
     return extras;
+  }
+
+  private buildDeepResearchMcpToolConfig(): Record<string, unknown> | null {
+    const configuredUrl = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_SERVER_URL')?.trim();
+    const disableProxy = this.parseBooleanEnv(
+      this.config.get<string>('DEEP_RESEARCH_DISABLE_PROXY'),
+      false,
+    );
+    const fallbackPort = this.parseOptionalInt(this.config.get<string>('DEEP_RESEARCH_MCP_PORT')) ?? 4100;
+
+    let serverUrl = configuredUrl;
+    if (!serverUrl && disableProxy) {
+      serverUrl = `http://localhost:${fallbackPort}/api/mcp`;
+    }
+
+    if (!serverUrl) {
+      return null;
+    }
+
+    const serverLabel =
+      this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_SERVER_LABEL')?.trim() ||
+      'uk_parliament_research';
+
+    const allowedToolsRaw = this.config
+      .get<string>('OPENAI_DEEP_RESEARCH_MCP_ALLOWED_TOOLS')
+      ?.trim();
+    let allowedTools: string[] | null = null;
+    if (allowedToolsRaw) {
+      const parsed = allowedToolsRaw
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+      if (parsed.length > 0) {
+        allowedTools = parsed;
+      }
+    }
+
+    const headersFromEnv = this.parseHeadersRecord(
+      this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_HEADERS'),
+    );
+    const mcpKey = this.config.get<string>('MCP_KEY')?.trim();
+
+    const headers: Record<string, string> = {};
+    if (headersFromEnv) {
+      Object.assign(headers, headersFromEnv);
+    }
+    if (mcpKey) {
+      headers['x-api-key'] = mcpKey;
+    }
+
+    const tool: Record<string, unknown> = {
+      type: 'mcp',
+      server_url: serverUrl,
+      server_label: serverLabel,
+    };
+
+    if (allowedTools) {
+      tool.allowed_tools = allowedTools;
+    }
+    if (Object.keys(headers).length > 0) {
+      tool.headers = headers;
+    }
+
+    tool.require_approval = 'never';
+
+    return tool;
+  }
+
+  private parseHeadersRecord(raw: string | undefined): Record<string, string> | null {
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        this.logger.warn('[writing-desk research] MCP headers must be provided as a JSON object.');
+        return null;
+      }
+      const entries: Array<[string, string]> = [];
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'string') {
+          const trimmedKey = key.trim();
+          const trimmedValue = value.trim();
+          if (trimmedKey.length > 0 && trimmedValue.length > 0) {
+            entries.push([trimmedKey, trimmedValue]);
+          }
+        }
+      }
+      if (entries.length === 0) {
+        return null;
+      }
+      return Object.fromEntries(entries);
+    } catch (error) {
+      this.logger.warn(
+        `[writing-desk research] Failed to parse OPENAI_DEEP_RESEARCH_MCP_HEADERS: ${
+          (error as Error)?.message ?? error
+        }`,
+      );
+      return null;
+    }
+  }
+
+  private logMcpToolStreamEvent(
+    event: ResponseStreamEvent,
+    context: { userId: string; jobId: string },
+  ): void {
+    if (!event || typeof event !== 'object') return;
+
+    if (event.type !== 'response.output_item.added' && event.type !== 'response.output_item.done') {
+      return;
+    }
+
+    const item = (event as any)?.item;
+    if (!item || typeof item !== 'object') return;
+    if (item.type !== 'mcp_call') return;
+
+    const callId = typeof item.id === 'string' ? item.id : null;
+    const toolName = typeof item.name === 'string' ? item.name : null;
+    const serverLabel = typeof item.server_label === 'string' ? item.server_label : null;
+    if (event.type === 'response.output_item.added') {
+      const payload = {
+        userId: context.userId,
+        jobId: context.jobId,
+        callId,
+        toolName,
+        serverLabel,
+        phase: 'started',
+        sequenceNumber: (event as any)?.sequence_number ?? null,
+      };
+      this.logger.log(`[writing-desk mcp] ${JSON.stringify(payload)}`);
+      return;
+    }
+
+    const hasError = typeof item.error === 'string' && item.error.trim().length > 0;
+    const errorPreview = hasError ? this.buildLogPreview(item.error) : null;
+    const payload = {
+      userId: context.userId,
+      jobId: context.jobId,
+      callId,
+      toolName,
+      serverLabel,
+      phase: hasError ? 'failed' : 'completed',
+      errorPreview,
+      sequenceNumber: (event as any)?.sequence_number ?? null,
+    };
+    const message = `[writing-desk mcp] ${JSON.stringify(payload)}`;
+    if (hasError) {
+      this.logger.warn(message);
+    } else {
+      this.logger.log(message);
+    }
+  }
+
+  private buildLogPreview(input: unknown, limit = 400): string | null {
+    if (input === null || input === undefined) return null;
+    let value: string;
+    if (typeof input === 'string') {
+      value = input;
+    } else {
+      try {
+        value = JSON.stringify(input);
+      } catch {
+        value = String(input);
+      }
+    }
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return null;
+    if (trimmed.length <= limit) return trimmed;
+    return `${trimmed.slice(0, limit)}…`;
+  }
+
+  private logMcpListToolsEvent(
+    event: ResponseStreamEvent,
+    context: { userId: string; jobId: string },
+  ): void {
+    if (!event || typeof event !== 'object') return;
+    const sequenceNumber = (event as any)?.sequence_number ?? null;
+
+    if (event.type === 'response.mcp_list_tools.in_progress') {
+      this.logger.log(
+        `[writing-desk mcp] ${JSON.stringify({
+          userId: context.userId,
+          jobId: context.jobId,
+          phase: 'list_tools_in_progress',
+          sequenceNumber,
+        })}`,
+      );
+      return;
+    }
+
+    if (event.type === 'response.mcp_list_tools.completed') {
+      this.logger.log(
+        `[writing-desk mcp] ${JSON.stringify({
+          userId: context.userId,
+          jobId: context.jobId,
+          phase: 'list_tools_completed',
+          sequenceNumber,
+        })}`,
+      );
+      return;
+    }
+
+    if (event.type === 'response.mcp_list_tools.failed') {
+      const error = this.buildLogPreview((event as any)?.error);
+      this.logger.warn(
+        `[writing-desk mcp] ${JSON.stringify({
+          userId: context.userId,
+          jobId: context.jobId,
+          phase: 'list_tools_failed',
+          error,
+          sequenceNumber,
+        })}`,
+      );
+    }
   }
 
   private getSupportedReasoningEfforts(model?: string | null): Array<'low' | 'medium' | 'high'> {
