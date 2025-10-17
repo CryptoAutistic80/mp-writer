@@ -2072,6 +2072,62 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       tools.push({ type: 'code_interpreter', container: { type: 'auto' } });
     }
 
+    // Add MCP server configuration
+    const mcpServerUrl = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_SERVER_URL')?.trim();
+    const mcpServerLabel = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_SERVER_LABEL')?.trim();
+    const mcpAllowedTools = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_ALLOWED_TOOLS')?.trim();
+    const mcpHeaders = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_HEADERS')?.trim();
+
+    this.logger.log(`[writing-desk research] MCP config: url=${mcpServerUrl}, label=${mcpServerLabel}, headers=${mcpHeaders}`);
+
+    if (mcpServerUrl && mcpServerLabel) {
+      const mcpTool: Record<string, unknown> = {
+        type: 'mcp',
+        server_label: mcpServerLabel,
+        server_url: mcpServerUrl,
+        require_approval: 'never',
+      };
+
+      // Add headers if provided
+      if (mcpHeaders) {
+        try {
+          let headersStr = mcpHeaders;
+          // Replace ${MCP_KEY} placeholder with actual key
+          const mcpKey = this.config.get<string>('MCP_KEY');
+          if (mcpKey) {
+            headersStr = headersStr.replace('${MCP_KEY}', mcpKey);
+          }
+          const headersObj = JSON.parse(headersStr);
+          // Add required MCP protocol version header
+          headersObj['MCP-Protocol-Version'] = '1.1';
+          mcpTool.headers = headersObj;
+        } catch (error) {
+          this.logger.warn(`Failed to parse MCP headers: ${error}`);
+        }
+      } else {
+        // Add minimal required headers if none provided
+        mcpTool.headers = {
+          'MCP-Protocol-Version': '1.1',
+        };
+      }
+
+      // Add allowed tools if provided
+      if (mcpAllowedTools) {
+        const toolsList = mcpAllowedTools
+          .split(',')
+          .map((tool) => tool.trim())
+          .filter((tool) => tool.length > 0);
+        if (toolsList.length > 0) {
+          mcpTool.allowed_tools = toolsList;
+        }
+      }
+
+      tools.push(mcpTool);
+      this.logger.log(`[writing-desk research] MCP tool added: ${JSON.stringify(mcpTool)}`);
+    } else {
+      this.logger.log(`[writing-desk research] MCP tool not added: missing url or label`);
+    }
+
     const extras: DeepResearchRequestExtras = {};
     if (tools.length > 0) {
       extras.tools = tools;

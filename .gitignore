@@ -89,3 +89,4 @@ playwright/.cache/
 
 # Docker local overrides
 docker-compose.override.local.yml
+env.txt
