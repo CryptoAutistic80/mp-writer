@@ -2077,6 +2077,8 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
     const mcpServerLabel = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_SERVER_LABEL')?.trim();
     const mcpAllowedTools = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_ALLOWED_TOOLS')?.trim();
     const mcpHeaders = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_HEADERS')?.trim();
+    const mcpProtocolVersion =
+      this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_PROTOCOL_VERSION')?.trim() ?? '2025-03-26';
 
     this.logger.log(`[writing-desk research] MCP config: url=${mcpServerUrl}, label=${mcpServerLabel}, headers=${mcpHeaders}`);
 
@@ -2098,8 +2100,8 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
             headersStr = headersStr.replace('${MCP_KEY}', mcpKey);
           }
           const headersObj = JSON.parse(headersStr);
-          // Add required MCP protocol version header
-          headersObj['MCP-Protocol-Version'] = '1.1';
+          // Ensure required MCP protocol version header matches the negotiated version
+          headersObj['MCP-Protocol-Version'] = mcpProtocolVersion;
           mcpTool.headers = headersObj;
         } catch (error) {
           this.logger.warn(`Failed to parse MCP headers: ${error}`);
@@ -2107,7 +2109,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       } else {
         // Add minimal required headers if none provided
         mcpTool.headers = {
-          'MCP-Protocol-Version': '1.1',
+          'MCP-Protocol-Version': mcpProtocolVersion,
         };
       }
 
