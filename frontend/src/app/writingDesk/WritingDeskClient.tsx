@@ -2622,6 +2622,13 @@ ${letterDocumentBodyHtml}
                         ? 'Saved to my letters'
                         : 'Save to my letters'}
                   </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={!(savedLetterResponseId !== null && savedLetterResponseId === letterResponseId)}
+                  >
+                    My Letters
+                  </button>
                   <button type="button" className="btn-primary" onClick={handleCopyLetter}>
                     {letterCopyState === 'copied' ? 'Copied!' : letterCopyState === 'error' ? 'Copy failed — try again' : 'Copy for email'}
                   </button>

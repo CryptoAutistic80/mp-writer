@@ -70,20 +70,25 @@ export default function StartWritingButton() {
 
   return (
     <div className="container start-writing-panel">
-      <button
-        type="button"
-        className="start-writing-btn"
-        aria-label="Start writing"
-        aria-busy={checking}
-        onClick={handleClick}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/assets/start_writing.png"
-          alt="Start writing"
-          className="start-writing-img"
-        />
-      </button>
+      <div className="start-writing-actions">
+        <button
+          type="button"
+          className="start-writing-btn"
+          aria-label="Start writing"
+          aria-busy={checking}
+          onClick={handleClick}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/assets/start_writing.png"
+            alt="Start writing"
+            className="start-writing-img"
+          />
+        </button>
+        <button type="button" className="btn-secondary start-writing-my-letters-btn">
+          My Letters
+        </button>
+      </div>
 
       {toast && <Toast>{toast}</Toast>}
     </div>

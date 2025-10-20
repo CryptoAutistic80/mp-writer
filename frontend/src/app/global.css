@@ -1413,6 +1413,13 @@ body {
   padding: 0;
 }
 
+.start-writing-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
 .start-writing-btn {
   appearance: none;
   border: none;
@@ -1433,6 +1440,11 @@ body {
   display: block;
   width: clamp(180px, 40vw, 320px);
   height: auto;
+}
+
+.start-writing-my-letters-btn {
+  justify-content: center;
+  min-width: 160px;
 }
 
 @keyframes soft-bounce {
