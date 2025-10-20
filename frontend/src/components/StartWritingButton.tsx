@@ -73,19 +73,14 @@ export default function StartWritingButton() {
       <div className="start-writing-actions">
         <button
           type="button"
-          className="start-writing-btn"
+          className="start-writing-btn cta-pill cta-pill--primary"
           aria-label="Start writing"
           aria-busy={checking}
           onClick={handleClick}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/assets/start_writing.png"
-            alt="Start writing"
-            className="start-writing-img"
-          />
+          Start Writing
         </button>
-        <button type="button" className="btn-secondary start-writing-my-letters-btn">
+        <button type="button" className="start-writing-my-letters-btn cta-pill cta-pill--secondary">
           My Letters
         </button>
       </div>

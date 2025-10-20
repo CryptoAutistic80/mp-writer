@@ -2624,7 +2624,7 @@ ${letterDocumentBodyHtml}
                   </button>
                   <button
                     type="button"
-                    className="btn-secondary"
+                    className="cta-pill cta-pill--secondary writing-desk-my-letters-btn"
                     disabled={!(savedLetterResponseId !== null && savedLetterResponseId === letterResponseId)}
                   >
                     My Letters
