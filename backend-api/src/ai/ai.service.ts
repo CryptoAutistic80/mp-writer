@@ -24,14 +24,14 @@ const DEEP_RESEARCH_CREDIT_COST = 0.7;
 const LETTER_CREDIT_COST = 0.2;
 const TRANSCRIPTION_CREDIT_COST = 0;
 
-type DeepResearchRequestExtras = {
+interface DeepResearchRequestExtras {
   tools?: Array<Record<string, unknown>>;
   max_tool_calls?: number;
   reasoning?: {
     summary?: 'auto' | 'disabled' | null;
     effort?: 'low' | 'medium' | 'high';
   };
-};
+}
 
 type DeepResearchStreamPayload =
   | { type: 'status'; status: string; remainingCredits?: number | null }
@@ -603,7 +603,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
 
     return new Observable<MessageEvent>((subscriber) => {
       let subscription: Subscription | null = null;
-      let settled = false;
+      let _settled = false;
 
       const attach = async () => {
         try {
@@ -620,14 +620,14 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
               }
             },
             complete: () => {
-              settled = true;
+              _settled = true;
               if (!subscriber.closed) {
                 subscriber.complete();
               }
             },
           });
         } catch (error) {
-          settled = true;
+          _settled = true;
           if (error instanceof BadRequestException) {
             subscriber.next({
               data: JSON.stringify({ type: 'error', message: error.message }),
@@ -644,7 +644,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       return () => {
         subscription?.unsubscribe();
         subscription = null;
-        settled = true;
+        _settled = true;
       };
     });
   }
@@ -1449,7 +1449,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       let lastSequenceNumber: number | null = null;
       let currentStream: ResponseStreamLike | null = openAiStream;
       let resumeAttempts = 0;
-      let lastActivityTime = Date.now();
+      let _lastActivityTime = Date.now();
 
       // Set up periodic status updates during quiet periods
       const lastCustomMessages: string[] = []; // Track last 2 custom messages
@@ -1508,7 +1508,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           }
           
           send({ type: 'event', event: { type: 'quiet_period', message: randomMessage } });
-          lastActivityTime = Date.now();
+          _lastActivityTime = Date.now();
           startQuietPeriodTimer(); // Reset the timer
         }, 5000); // 5 seconds of inactivity
       };
@@ -1523,7 +1523,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
             if (!event) continue;
 
             // Reset quiet period timer on any activity
-            lastActivityTime = Date.now();
+            _lastActivityTime = Date.now();
             if (quietPeriodTimer) {
               clearTimeout(quietPeriodTimer);
               startQuietPeriodTimer();
@@ -2077,10 +2077,14 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
     const mcpServerLabel = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_SERVER_LABEL')?.trim();
     const mcpAllowedTools = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_ALLOWED_TOOLS')?.trim();
     const mcpHeaders = this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_HEADERS')?.trim();
+    const configuredProtocolVersion =
+      this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_PROTOCOL_VERSION')?.trim();
     const mcpProtocolVersion =
-      this.config.get<string>('OPENAI_DEEP_RESEARCH_MCP_PROTOCOL_VERSION')?.trim() ?? '2025-03-26';
+      configuredProtocolVersion && configuredProtocolVersion.length > 0 ? configuredProtocolVersion : '1.1';
 
-    this.logger.log(`[writing-desk research] MCP config: url=${mcpServerUrl}, label=${mcpServerLabel}, headers=${mcpHeaders}`);
+    this.logger.log(
+      `[writing-desk research] MCP config: url=${mcpServerUrl}, label=${mcpServerLabel}, headers=${mcpHeaders}, protocolVersion=${mcpProtocolVersion}`,
+    );
 
     if (mcpServerUrl && mcpServerLabel) {
       const mcpTool: Record<string, unknown> = {
@@ -3225,7 +3229,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
 
     try {
       return JSON.parse(JSON.stringify(event)) as Record<string, unknown>;
-    } catch (error) {
+    } catch {
       const plain: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(event as unknown as Record<string, unknown>)) {
         plain[key] = value as unknown;

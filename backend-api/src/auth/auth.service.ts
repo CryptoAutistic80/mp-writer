@@ -11,9 +11,9 @@ export class AuthService {
 
   async validateOrCreateGoogleUser(profile: {
     id: string;
-    emails?: { value: string }[];
+    emails?: Array<{ value: string }>;
     displayName?: string;
-    photos?: { value: string }[];
+    photos?: Array<{ value: string }>;
   }) {
     const email = profile.emails?.[0]?.value;
     const name = profile.displayName ?? email ?? 'Unknown';

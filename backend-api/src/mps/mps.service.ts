@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 
-type LookupResult = {
+interface LookupResult {
   constituency: string;
   mp?: {
     id?: number;
@@ -71,7 +71,9 @@ export class MpsService {
           }
         }
       }
-    } catch {}
+    } catch {
+      // Ignore errors when fetching MP data
+    }
 
     // 2b) Direct constituency search (exact match only)
     if (!mpData) {
@@ -93,7 +95,9 @@ export class MpsService {
           });
           mpData = (match?.value ?? match) || null;
         }
-      } catch {}
+      } catch {
+        // Ignore errors when searching MP data
+      }
     }
 
     // 2c) Fetch all current members and filter by constituency name
@@ -117,7 +121,9 @@ export class MpsService {
             mpData = (match?.value ?? match) || null;
           }
         }
-      } catch {}
+      } catch {
+        // Ignore errors when fetching MP data
+      }
     }
 
     let mp: LookupResult['mp'] = null;

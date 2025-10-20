@@ -59,6 +59,13 @@
           "buildTarget": "backend-api:build:production"
         }
       }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "outputs": ["{options.outputFile}"],
+      "options": {
+        "lintFilePatterns": ["backend-api/src/**/*.ts", "backend-api/src/**/*.tsx"]
+      }
     }
   },
   "tags": []

@@ -92,7 +92,7 @@ export class AuthController {
       });
       
       return res.send(Buffer.from(imageBuffer));
-    } catch (error) {
+    } catch {
       return res.status(500).json({ message: 'Failed to fetch avatar' });
     }
   }

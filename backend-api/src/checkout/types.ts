@@ -1,4 +1,4 @@
-export type CheckoutUser = { id: string; email?: string | null };
+export interface CheckoutUser { id: string; email?: string | null };
 
 export interface CreditPackage {
   credits: number;

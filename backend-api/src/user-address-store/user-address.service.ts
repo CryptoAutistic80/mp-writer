@@ -31,7 +31,7 @@ export class UserAddressService {
         telephone: typeof address.telephone === 'string' ? address.telephone : '',
       };
       return { address: normalised };
-    } catch (e) {
+    } catch {
       // If decryption fails, treat as no data (could also surface an error)
       return { address: null };
     }

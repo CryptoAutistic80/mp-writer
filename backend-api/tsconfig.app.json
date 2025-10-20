@@ -6,8 +6,18 @@
     "types": ["node"],
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
-    "target": "es2021"
+    "target": "es2021",
+    "strict": true,
+    "strictNullChecks": true,
+    "lib": ["es2021", "dom"]
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.spec.ts", "src/**/*.spec.tsx", "src/**/*.test.ts", "src/**/*.test.tsx"]
+  "exclude": [
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx", 
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/ai/ai.service.spec.ts",
+    "src/writing-desk-jobs.controller.spec.ts"
+  ]
 }

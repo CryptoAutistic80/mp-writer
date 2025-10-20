@@ -1,7 +1,7 @@
 import { BadGatewayException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-export type NormalizedAddress = {
+export interface NormalizedAddress {
   id: string;
   line1: string;
   line2?: string;
@@ -9,7 +9,7 @@ export type NormalizedAddress = {
   county?: string;
   postcode: string;
   label: string;
-};
+}
 
 function normalizePostcode(input: string) {
   const tight = input.replace(/\s+/g, '').toUpperCase();
