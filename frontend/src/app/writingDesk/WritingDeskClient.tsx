@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import ActiveJobResumeModal from '../../features/writing-desk/components/ActiveJobResumeModal';
@@ -162,6 +162,73 @@ const LETTER_DOCUMENT_CSS = `
     word-break: break-word;
   }
 `;
+
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const htmlToEditableText = (html: string): string => {
+  if (typeof html !== 'string' || html.trim().length === 0) {
+    return '';
+  }
+
+  if (typeof window === 'undefined') {
+    return letterHtmlToPlainText(html);
+  }
+
+  const container = window.document.createElement('div');
+  container.innerHTML = html;
+  const text = container.innerText || container.textContent || '';
+  return text
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trimEnd())
+    .join('\n')
+    .trim();
+};
+
+const editableTextToHtml = (value: string): string => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const normalised = value.replace(/\r\n/g, '\n');
+  const lines = normalised.split('\n');
+  const paragraphs: string[][] = [];
+  let current: string[] = [];
+
+  for (const rawLine of lines) {
+    if (rawLine.trim().length === 0) {
+      if (current.length > 0) {
+        paragraphs.push(current);
+        current = [];
+      }
+      continue;
+    }
+
+    current.push(rawLine.replace(/\s+/g, ' ').trim());
+  }
+
+  if (current.length > 0) {
+    paragraphs.push(current);
+  }
+
+  if (paragraphs.length === 0) {
+    return '';
+  }
+
+  return paragraphs
+    .map((paragraph) => {
+      const htmlLines = paragraph.map((line) => escapeHtml(line));
+      return `<p>${htmlLines.join('<br />')}</p>`;
+    })
+    .join('');
+};
 
 const createLetterRunId = () => {
   if (typeof window !== 'undefined' && window.crypto && typeof window.crypto.randomUUID === 'function') {
@@ -337,6 +404,8 @@ export default function WritingDeskClient() {
   const [isSavingLetter, setIsSavingLetter] = useState(false);
   const [letterSaveError, setLetterSaveError] = useState<string | null>(null);
   const [savedLetterResponseId, setSavedLetterResponseId] = useState<string | null>(null);
+  const [isLetterEditing, setIsLetterEditing] = useState(false);
+  const [editableLetterText, setEditableLetterText] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [recomposeConfirmOpen, setRecomposeConfirmOpen] = useState(false);
   const [researchConfirmOpen, setResearchConfirmOpen] = useState(false);
@@ -349,7 +418,9 @@ export default function WritingDeskClient() {
   const letterJsonBufferRef = useRef<string>('');
   const lastLetterEventRef = useRef<number>(0);
   const lastLetterResumeAttemptRef = useRef<number>(0);
+  const editableLetterTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const letterEditToggleLabelId = useId();
 
   const clearToast = useCallback(() => {
     if (toastTimeoutRef.current) {
@@ -407,6 +478,31 @@ export default function WritingDeskClient() {
     };
   }, [hasHandledInitialJob, letterMetadata?.responseId, letterResponseId]);
 
+  useEffect(() => {
+    if (letterPhase !== 'completed') {
+      if (isLetterEditing) {
+        setIsLetterEditing(false);
+      }
+      if (editableLetterText !== '') {
+        setEditableLetterText('');
+      }
+      return;
+    }
+
+    if (!isLetterEditing) {
+      setEditableLetterText(htmlToEditableText(letterContentHtml));
+    }
+  }, [editableLetterText, isLetterEditing, letterContentHtml, letterPhase]);
+
+  useEffect(() => {
+    if (!isLetterEditing) return;
+    const element = editableLetterTextareaRef.current;
+    if (!element) return;
+    element.focus();
+    const length = element.value.length;
+    element.setSelectionRange(length, length);
+  }, [isLetterEditing]);
+
   const letterHtmlForExport = useMemo(() => {
     if (typeof letterContentHtml !== 'string' || letterContentHtml.trim().length === 0) {
       return '<p>No content available.</p>';
@@ -435,6 +531,8 @@ ${letterDocumentBodyHtml}
 </html>`,
     [letterDocumentBodyHtml],
   );
+
+  const letterActionsDisabled = isLetterEditing;
 
   const resolveDownloadFilename = useCallback(
     (extension: 'pdf' | 'docx') => {
@@ -1870,7 +1968,41 @@ ${letterDocumentBodyHtml}
     setResearchConfirmOpen(false);
   }, []);
 
+  const handleToggleLetterEdit = useCallback(() => {
+    if (letterPhase !== 'completed') {
+      return;
+    }
+
+    if (!isLetterEditing) {
+      setEditableLetterText(htmlToEditableText(letterContentHtml));
+      setIsLetterEditing(true);
+      setLetterCopyState('idle');
+      setLetterSaveError(null);
+      return;
+    }
+
+    const nextHtml = editableTextToHtml(editableLetterText);
+    setLetterContentHtml(nextHtml);
+    setLetterMetadata((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      return {
+        ...prev,
+        letterContent: editableLetterText.replace(/\r\n/g, '\n'),
+      };
+    });
+    setLetterCopyState('idle');
+    setLetterSaveError(null);
+    setIsLetterEditing(false);
+  }, [editableLetterText, isLetterEditing, letterContentHtml, letterPhase]);
+
   const handleSaveLetter = useCallback(async () => {
+    if (isLetterEditing) {
+      setLetterSaveError('Finish editing your letter before saving.');
+      return;
+    }
+
     if (!letterMetadata || !letterContentHtml || !letterResponseId) {
       setLetterSaveError('Your letter is still preparing. Please wait a moment and try again.');
       return;
@@ -1909,6 +2041,7 @@ ${letterDocumentBodyHtml}
       setIsSavingLetter(false);
     }
   }, [
+    isLetterEditing,
     letterContentHtml,
     letterMetadata,
     letterResponseId,
@@ -1919,6 +2052,9 @@ ${letterDocumentBodyHtml}
   ]);
 
   const handleCopyLetter = useCallback(async () => {
+    if (isLetterEditing) {
+      return;
+    }
     if (!letterContentHtml) {
       setLetterCopyState('error');
       return;
@@ -1948,10 +2084,10 @@ ${letterDocumentBodyHtml}
       }
       setLetterCopyState('error');
     }
-  }, [letterContentHtml]);
+  }, [isLetterEditing, letterContentHtml]);
 
   const handleDownloadDocx = useCallback(async () => {
-    if (isDownloadingDocx || typeof window === 'undefined') return;
+    if (isLetterEditing || isDownloadingDocx || typeof window === 'undefined') return;
     setIsDownloadingDocx(true);
     try {
       const htmlDocxModule = await import('html-docx-js/dist/html-docx.js');
@@ -1963,10 +2099,16 @@ ${letterDocumentBodyHtml}
     } finally {
       setIsDownloadingDocx(false);
     }
-  }, [isDownloadingDocx, letterDocxHtml, resolveDownloadFilename, triggerBlobDownload]);
+  }, [
+    isLetterEditing,
+    isDownloadingDocx,
+    letterDocxHtml,
+    resolveDownloadFilename,
+    triggerBlobDownload,
+  ]);
 
   const handleDownloadPdf = useCallback(async () => {
-    if (isDownloadingPdf || typeof window === 'undefined') return;
+    if (isLetterEditing || isDownloadingPdf || typeof window === 'undefined') return;
     setIsDownloadingPdf(true);
     const container = document.createElement('div');
     let appended = false;
@@ -2007,7 +2149,12 @@ ${letterDocumentBodyHtml}
       }
       setIsDownloadingPdf(false);
     }
-  }, [isDownloadingPdf, letterDocumentBodyHtml, resolveDownloadFilename]);
+  }, [
+    isLetterEditing,
+    isDownloadingPdf,
+    letterDocumentBodyHtml,
+    resolveDownloadFilename,
+  ]);
 
   return (
     <>
@@ -2598,16 +2745,67 @@ ${letterDocumentBodyHtml}
                   <p style={{ marginTop: 4, fontSize: '0.85rem', color: '#6b7280' }}>Letter reference ID: {letterResponseId}</p>
                 )}
                 <div
-                  className="letter-preview"
+                  className={`letter-preview${isLetterEditing ? ' letter-preview--editing' : ''}`}
                   style={{ marginTop: 16 }}
-                  dangerouslySetInnerHTML={{ __html: letterContentHtml || '<p>No content available.</p>' }}
-                />
-                <div className="actions" style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                >
+                  {isLetterEditing ? (
+                    <textarea
+                      ref={editableLetterTextareaRef}
+                      className="letter-preview__textarea"
+                      value={editableLetterText}
+                      onChange={(event) => {
+                        setEditableLetterText(event.target.value);
+                        if (letterCopyState !== 'idle') {
+                          setLetterCopyState('idle');
+                        }
+                      }}
+                      aria-label="Edit drafted letter text"
+                      spellCheck={true}
+                    />
+                  ) : (
+                    <div
+                      className="letter-preview__content"
+                      dangerouslySetInnerHTML={{ __html: letterContentHtml || '<p>No content available.</p>' }}
+                    />
+                  )}
+                </div>
+                <div
+                  className="actions"
+                  style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}
+                >
+                  <div className="letter-edit-toggle" style={{ gridColumn: '1 / -1' }}>
+                    <div className="letter-edit-toggle__control">
+                      <span id={letterEditToggleLabelId} className="letter-edit-toggle__label">
+                        Edit letter
+                      </span>
+                      <button
+                        type="button"
+                        className="letter-edit-toggle__switch"
+                        role="switch"
+                        aria-checked={isLetterEditing}
+                        aria-labelledby={letterEditToggleLabelId}
+                        onClick={handleToggleLetterEdit}
+                      >
+                        <span className="letter-edit-toggle__track" aria-hidden="true">
+                          <span className="letter-edit-toggle__thumb" data-state={isLetterEditing ? 'on' : 'off'} />
+                        </span>
+                        <span className="letter-edit-toggle__status" aria-hidden="true">
+                          {isLetterEditing ? 'On' : 'Off'}
+                        </span>
+                      </button>
+                    </div>
+                    <p className="letter-edit-toggle__hint">
+                      {isLetterEditing
+                        ? 'Editing enabled. Switch off to save, copy, or export your letter.'
+                        : 'Switch on to make quick tweaks before saving or exporting.'}
+                    </p>
+                  </div>
                   <button
                     type="button"
                     className="btn-primary"
                     onClick={handleSaveLetter}
                     disabled={
+                      letterActionsDisabled ||
                       isSavingLetter ||
                       !letterResponseId ||
                       !letterMetadata ||
@@ -2622,14 +2820,19 @@ ${letterDocumentBodyHtml}
                         ? 'Saved to my letters'
                         : 'Save to my letters'}
                   </button>
-                  <button type="button" className="btn-primary" onClick={handleCopyLetter}>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={handleCopyLetter}
+                    disabled={letterActionsDisabled}
+                  >
                     {letterCopyState === 'copied' ? 'Copied!' : letterCopyState === 'error' ? 'Copy failed — try again' : 'Copy for email'}
                   </button>
                   <button
                     type="button"
                     className="btn-secondary"
                     onClick={handleDownloadPdf}
-                    disabled={isDownloadingPdf}
+                    disabled={letterActionsDisabled || isDownloadingPdf}
                     aria-busy={isDownloadingPdf}
                   >
                     {isDownloadingPdf ? 'Preparing PDF...' : 'Download PDF'}
@@ -2638,23 +2841,29 @@ ${letterDocumentBodyHtml}
                     type="button"
                     className="btn-secondary"
                     onClick={handleDownloadDocx}
-                    disabled={isDownloadingDocx}
+                    disabled={letterActionsDisabled || isDownloadingDocx}
                     aria-busy={isDownloadingDocx}
                   >
                     {isDownloadingDocx ? 'Preparing DOCX...' : 'Download DOCX'}
                   </button>
-                  <button type="button" className="btn-secondary" onClick={handleRequestRecompose}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={handleRequestRecompose}
+                    disabled={letterActionsDisabled}
+                  >
                     Recompose this letter
                   </button>
-                  <button 
-                    type="button" 
-                    className="btn-secondary" 
+                  <button
+                    type="button"
+                    className="btn-secondary"
                     onClick={handleRequestExit}
-                    style={{ 
-                      backgroundColor: '#fee2e2', 
-                      color: '#991b1b', 
-                      border: '1px solid #fecaca' 
+                    style={{
+                      backgroundColor: '#fee2e2',
+                      color: '#991b1b',
+                      border: '1px solid #fecaca'
                     }}
+                    disabled={letterActionsDisabled}
                   >
                     Exit writing desk
                   </button>
@@ -2687,6 +2896,127 @@ ${letterDocumentBodyHtml}
       </div>
       </section>
       <style>{`
+        .letter-preview {
+          background: #ffffff;
+          border: 1px solid #e5e7eb;
+          border-radius: 12px;
+          padding: 20px;
+          min-height: 260px;
+          box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
+          transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .letter-preview--editing {
+          border-color: #2563eb;
+          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+        }
+
+        .letter-preview__content {
+          line-height: 1.7;
+          color: #111827;
+        }
+
+        .letter-preview__content p {
+          margin-bottom: 1rem;
+        }
+
+        .letter-preview__textarea {
+          width: 100%;
+          min-height: 260px;
+          border: none;
+          resize: vertical;
+          font: inherit;
+          line-height: 1.7;
+          color: #111827;
+          background: transparent;
+        }
+
+        .letter-preview__textarea:focus {
+          outline: none;
+        }
+
+        .letter-edit-toggle {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 12px;
+          padding: 12px 16px;
+          border: 1px solid #bfdbfe;
+          border-radius: 12px;
+          background: #eff6ff;
+        }
+
+        .letter-edit-toggle__control {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .letter-edit-toggle__label {
+          font-weight: 600;
+          color: #1d4ed8;
+        }
+
+        .letter-edit-toggle__switch {
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          border: none;
+          background: none;
+          padding: 4px 0;
+          cursor: pointer;
+          color: #1f2937;
+          font-weight: 600;
+        }
+
+        .letter-edit-toggle__switch:focus-visible {
+          outline: 2px solid #2563eb;
+          outline-offset: 2px;
+        }
+
+        .letter-edit-toggle__track {
+          position: relative;
+          width: 44px;
+          height: 24px;
+          border-radius: 12px;
+          background: #cbd5f5;
+          transition: background-color 0.2s ease;
+        }
+
+        .letter-edit-toggle__thumb {
+          position: absolute;
+          top: 3px;
+          left: 3px;
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          background: #ffffff;
+          box-shadow: 0 2px 4px rgba(15, 23, 42, 0.2);
+          transition: transform 0.2s ease;
+        }
+
+        .letter-edit-toggle__switch[aria-checked='true'] .letter-edit-toggle__track {
+          background: #2563eb;
+        }
+
+        .letter-edit-toggle__switch[aria-checked='true'] .letter-edit-toggle__thumb {
+          transform: translateX(20px);
+        }
+
+        .letter-edit-toggle__status {
+          font-size: 0.85rem;
+          min-width: 28px;
+          text-align: left;
+          color: #1f2937;
+        }
+
+        .letter-edit-toggle__hint {
+          margin: 0;
+          font-size: 0.85rem;
+          color: #1e3a8a;
+          flex: 1 1 100%;
+        }
+
         @keyframes create-letter-jiggle {
           0%, 100% {
             transform: translateX(0);
