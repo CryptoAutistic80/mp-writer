@@ -1161,7 +1161,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           service: 'writing-desk-letter-composition',
           runDuration: Date.now() - run.startedAt,
           jsonBufferLength: jsonBuffer?.length || 0,
-          lastPersistedContentLength: lastPersistedContent?.length || 0
+          lastPersistedContentLength: this.safeStringLength(lastPersistedContent)
         }
       );
       
@@ -1212,7 +1212,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           },
           researchContentLength: researchContent?.length || 0,
           jsonBufferLength: jsonBuffer?.length || 0,
-          lastPersistedContentLength: lastPersistedContent?.length || 0,
+          lastPersistedContentLength: this.safeStringLength(lastPersistedContent),
           runDuration: Date.now() - run.startedAt,
           quietPeriodTimerActive: quietPeriodTimer !== null,
           settled: settled
@@ -2986,19 +2986,27 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
   private extractReferencesFromJson(buffer: string): string[] {
     try {
       const parsed = JSON.parse(buffer);
-      const refs = Array.isArray(parsed.references) ? parsed.references : [];
+      const rawRefs: unknown[] = Array.isArray(parsed.references)
+        ? (parsed.references as unknown[])
+        : [];
+      const refs: string[] = rawRefs.filter((ref): ref is string => typeof ref === 'string');
       // Decode percent-encoded URLs
-      return refs.map((ref) => {
-        if (typeof ref !== 'string') return '';
-        try {
-          return decodeURIComponent(ref);
-        } catch {
-          return ref;
-        }
-      }).filter(ref => ref.length > 0);
+      return refs
+        .map((ref) => {
+          try {
+            return decodeURIComponent(ref);
+          } catch {
+            return ref;
+          }
+        })
+        .filter((ref) => ref.length > 0);
     } catch {
       return [];
     }
+  }
+
+  private safeStringLength(value: string | null | undefined): number {
+    return typeof value === 'string' ? value.length : 0;
   }
 
   private normaliseLetterResultTypography(result: WritingDeskLetterResult): WritingDeskLetterResult {

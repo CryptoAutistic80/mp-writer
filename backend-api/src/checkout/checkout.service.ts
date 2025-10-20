@@ -267,12 +267,13 @@ export class CheckoutService {
 
     // Use transaction for atomicity
     const mongoSession = await this.connection.startSession();
-    let balance;
+    let updatedBalance: number | null = null;
 
     try {
       await mongoSession.withTransaction(async () => {
         // Add credits
-        balance = await this.userCredits.addToMine(userId, credits);
+        const balanceResult = await this.userCredits.addToMine(userId, credits);
+        updatedBalance = typeof balanceResult?.credits === 'number' ? balanceResult.credits : null;
         
         // Create purchase record
         await this.purchases.create(userId, {
@@ -296,10 +297,14 @@ export class CheckoutService {
         this.logger.warn(`Unable to mark session ${session.id} as fulfilled in Stripe: ${(error as Error).message}`);
       }
 
-      return { 
-        alreadyProcessed: false, 
-        creditsAdded: credits, 
-        balance: balance.credits 
+      if (typeof updatedBalance !== 'number') {
+        throw new InternalServerErrorException('Unable to determine updated credit balance.');
+      }
+
+      return {
+        alreadyProcessed: false,
+        creditsAdded: credits,
+        balance: updatedBalance,
       };
     } catch (error) {
       this.logger.error(`Transaction failed for session ${session.id}: ${(error as Error).message}`);

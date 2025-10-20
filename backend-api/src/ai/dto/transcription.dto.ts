@@ -16,7 +16,7 @@ export enum TranscriptionResponseFormat {
 
 export class TranscriptionDto {
   @IsString()
-  audioData: string; // Base64 encoded audio data
+  audioData!: string; // Base64 encoded audio data
 
   @IsOptional()
   @IsEnum(TranscriptionModel)
@@ -37,7 +37,7 @@ export class TranscriptionDto {
 
 export class StreamingTranscriptionDto {
   @IsString()
-  audioData: string; // Base64 encoded audio data
+  audioData!: string; // Base64 encoded audio data
 
   @IsOptional()
   @IsEnum(TranscriptionModel)
