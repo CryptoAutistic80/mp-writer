@@ -42,7 +42,12 @@ export default async function SiteHeader() {
         </div>
         <nav className="nav">
           <Link href="/how-it-works" className="hide-mobile">How it works</Link>
-          {isAuthed && <Link href="/dashboard">Dashboard</Link>}
+          {isAuthed && (
+            <>
+              <Link href="/dashboard">Dashboard</Link>
+              <Link href="/myLetters">My letters</Link>
+            </>
+          )}
 
           {!isAuthed ? (
             <a href="/api/auth/google?returnTo=/dashboard" className="google-btn" aria-label="Sign in with Google">
