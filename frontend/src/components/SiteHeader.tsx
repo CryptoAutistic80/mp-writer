@@ -46,7 +46,10 @@ export default async function SiteHeader() {
           {isAuthed && (
             <>
               <Link href="/dashboard">Dashboard</Link>
-              <Link href="/myLetters">My Letters</Link>
+              <Link href="/myLetters">
+                <span className="hide-mobile">My Letters</span>
+                <span className="mobile-only">Letters</span>
+              </Link>
             </>
           )}
 
