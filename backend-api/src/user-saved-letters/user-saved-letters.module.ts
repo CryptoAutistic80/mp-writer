@@ -11,3 +11,10 @@ import { UserSavedLetter, UserSavedLetterSchema } from './schemas/user-saved-let
   exports: [UserSavedLettersService],
 })
 export class UserSavedLettersModule {}
+
+export { ListSavedLettersDto } from './dto/list-saved-letters.dto';
+export type {
+  PaginatedUserSavedLettersResult,
+  SavedLetterMetadata,
+  UserSavedLetterResource,
+} from './user-saved-letters.service';

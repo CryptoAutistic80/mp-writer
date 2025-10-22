@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { FilterQuery, Model } from 'mongoose';
 import { SaveLetterDto, SavedLetterMetadataDto } from './dto/save-letter.dto';
 import { UserSavedLetter } from './schemas/user-saved-letter.schema';
 import { EncryptionService } from '../crypto/encryption.service';
@@ -17,6 +17,13 @@ export interface UserSavedLetterResource {
   rawJson: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PaginatedUserSavedLettersResult {
+  letters: UserSavedLetterResource[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
 }
 
 @Injectable()
@@ -74,6 +81,55 @@ export class UserSavedLettersService {
       .lean()
       .exec();
     return docs.map((doc) => this.toResource(doc));
+  }
+
+  async findByDateRange(
+    userId: string,
+    params: { startDate?: string; endDate?: string; page?: number; pageSize?: number },
+  ): Promise<PaginatedUserSavedLettersResult> {
+    const page = Math.max(1, Math.floor(params.page ?? 1));
+    const requestedPageSize = Math.max(1, Math.floor(params.pageSize ?? 20));
+    const pageSize = Math.min(requestedPageSize, 100);
+    const skip = (page - 1) * pageSize;
+
+    const filter: FilterQuery<UserSavedLetter> = { user: userId };
+    const createdAtFilter: Record<string, Date> = {};
+
+    if (params.startDate) {
+      const start = new Date(params.startDate);
+      if (!Number.isNaN(start.getTime())) {
+        createdAtFilter.$gte = start;
+      }
+    }
+
+    if (params.endDate) {
+      const end = new Date(params.endDate);
+      if (!Number.isNaN(end.getTime())) {
+        createdAtFilter.$lte = end;
+      }
+    }
+
+    if (Object.keys(createdAtFilter).length > 0) {
+      filter.createdAt = createdAtFilter;
+    }
+
+    const [totalCount, documents] = await Promise.all([
+      this.model.countDocuments(filter).exec(),
+      this.model
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize)
+        .lean()
+        .exec(),
+    ]);
+
+    return {
+      letters: documents.map((doc) => this.toResource(doc)),
+      totalCount,
+      page,
+      pageSize,
+    };
   }
 
   private toResource(doc: any): UserSavedLetterResource {
