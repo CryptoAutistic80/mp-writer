@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import InfoTooltip from './InfoTooltip';
 
 type Lookup = {
   constituency: string;
@@ -112,15 +113,22 @@ export default function MpFetch({ onPostcodeChange }: MpFetchProps) {
                 Change my MP
               </button>
             ) : (
-              <button
-                type="button"
-                className="btn-primary btn-wide"
-                disabled={!valid || loading}
-                aria-busy={loading}
-                onClick={() => { void doLookup(); }}
-              >
-                {loading ? 'Finding…' : 'Find my MP'}
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn-primary btn-wide"
+                  disabled={!valid || loading}
+                  aria-busy={loading}
+                  onClick={() => { void doLookup(); }}
+                >
+                  {loading ? 'Finding…' : 'Find my MP'}
+                </button>
+                <InfoTooltip
+                  content="We’ll look up your constituency MP using official data. Invalid postcodes or brief rate limits may pause the search for a moment."
+                  label="How MP lookup works"
+                  placement="bottom"
+                />
+              </div>
             )}
           </div>
         )}
@@ -133,7 +141,14 @@ export default function MpFetch({ onPostcodeChange }: MpFetchProps) {
       >
         {!data && (
           <div className="field">
-            <label htmlFor="postcode" className="label">Postcode</label>
+            <label htmlFor="postcode" className="label" style={{ display: 'flex', alignItems: 'center' }}>
+              <span>Postcode</span>
+              <InfoTooltip
+                content="As soon as the postcode looks complete we’ll automatically try the lookup for you."
+                label="Postcode lookup timing"
+                placement="right"
+              />
+            </label>
             <input
               ref={inputRef}
               id="postcode"
@@ -177,10 +192,10 @@ export default function MpFetch({ onPostcodeChange }: MpFetchProps) {
                 {(data.mp?.email || data.mp?.twitter || data.mp?.website) && (
                   <ul className="mp-links">
                     {data.mp?.email && (
-                      <li>
-                        <button
-                          type="button"
-                          className="mp-email"
+                    <li>
+                      <button
+                        type="button"
+                        className="mp-email"
                           aria-label={`Copy email ${data.mp.email}`}
                           onClick={async () => {
                             try {
@@ -203,11 +218,16 @@ export default function MpFetch({ onPostcodeChange }: MpFetchProps) {
                               // ignore copy errors silently
                             }
                           }}
-                        >
-                          {data.mp.email}
-                        </button>
-                        {copied && <span className="copy-hint" aria-live="polite">Copied</span>}
-                      </li>
+                      >
+                        {data.mp.email}
+                      </button>
+                      <InfoTooltip
+                        content="Click or tap to copy the email address. We’ll show a “Copied” hint once it’s saved to your clipboard."
+                        label="Copy MP email"
+                        placement="right"
+                      />
+                      {copied && <span className="copy-hint" aria-live="polite">Copied</span>}
+                    </li>
                     )}
                     {data.mp?.twitter && (
                       <li><a target="_blank" rel="noreferrer" href={`https://twitter.com/${data.mp.twitter.replace(/^@/, '')}`}>Twitter</a></li>

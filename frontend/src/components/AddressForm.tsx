@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import InfoTooltip from './InfoTooltip';
 
 type Address = {
   id: string;
@@ -239,7 +240,14 @@ export default function AddressForm({ seedPostcode }: AddressFormProps) {
       {/* Search row */}
       <form className="form-grid" onSubmit={(e) => e.preventDefault()}>
         <div className="field">
-          <label htmlFor="addr-postcode" className="label">Postcode</label>
+          <label htmlFor="addr-postcode" className="label" style={{ display: 'flex', alignItems: 'center' }}>
+            <span>Postcode</span>
+            <InfoTooltip
+              content="We’ll start fetching address suggestions automatically once the postcode looks valid."
+              label="Automatic address lookup"
+              placement="right"
+            />
+          </label>
           <input
             id="addr-postcode"
             className="input"
@@ -315,11 +323,25 @@ export default function AddressForm({ seedPostcode }: AddressFormProps) {
             <div className="actions" style={{ marginTop: 10 }}>
               <button type="button" className="btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save address'}</button>
               {!manual && (
-                <button type="button" className="btn-link" onClick={() => setManual(true)}>
-                  Edit manually
-                </button>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <button type="button" className="btn-link" onClick={() => setManual(true)}>
+                    Edit manually
+                  </button>
+                  <InfoTooltip
+                    content="Switch to manual editing if the lookup result isn’t quite right. Your typed changes will replace the suggestion."
+                    label="Edit address manually"
+                    placement="top"
+                  />
+                </div>
               )}
-              <button type="button" className="btn-link" onClick={clearSaved}>Clear saved</button>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <button type="button" className="btn-link" onClick={clearSaved}>Clear saved</button>
+                <InfoTooltip
+                  content="Remove the saved address from this device. You can fetch or type it again whenever you need."
+                  label="Clear saved address"
+                  placement="top"
+                />
+              </div>
             </div>
             {savedMsg && (
               <div className="status" aria-live="polite"><p style={{ color: '#2563eb', marginTop: 8 }}>{savedMsg}</p></div>

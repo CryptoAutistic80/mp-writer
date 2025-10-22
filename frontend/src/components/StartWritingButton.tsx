@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { Toast } from './Toast';
+import InfoTooltip from './InfoTooltip';
 
 export default function StartWritingButton() {
   const router = useRouter();
@@ -92,20 +93,27 @@ export default function StartWritingButton() {
 
   return (
     <div className="container start-writing-panel">
-      <button
-        type="button"
-        className={`start-writing-btn${clicked ? ' start-writing-btn--clicked' : ''}`}
-        aria-label="Start writing"
-        aria-busy={checking}
-        onClick={handleClick}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/assets/start_writing.png"
-          alt="Start writing"
-          className="start-writing-img"
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+        <button
+          type="button"
+          className={`start-writing-btn${clicked ? ' start-writing-btn--clicked' : ''}`}
+          aria-label="Start writing"
+          aria-busy={checking}
+          onClick={handleClick}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/assets/start_writing.png"
+            alt="Start writing"
+            className="start-writing-img"
+          />
+        </button>
+        <InfoTooltip
+          content="We’ll confirm you’re signed in, have credits, and have saved your MP and address before opening the writing desk."
+          label="What happens before writing starts"
+          placement="bottom"
         />
-      </button>
+      </div>
 
       {toast && <Toast>{toast}</Toast>}
     </div>

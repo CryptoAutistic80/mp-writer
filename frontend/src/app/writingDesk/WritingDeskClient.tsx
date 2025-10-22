@@ -24,6 +24,7 @@ import { fetchSavedLetters, saveLetter, startLetterComposition } from '../../fea
 import { composeLetterHtml } from '../../features/writing-desk/utils/composeLetterHtml';
 import { MicButton } from '../../components/audio/MicButton';
 import { Toast } from '../../components/Toast';
+import InfoTooltip from '../../components/InfoTooltip';
 
 type StepKey = 'issueDescription';
 
@@ -494,6 +495,15 @@ export default function WritingDeskClient() {
     availableCredits === null
       ? 'Checking available credits'
       : `You have ${formatCredits(availableCredits)} credits available`;
+  const creditTooltipMessage = useMemo(() => {
+    if (availableCredits === null) {
+      return 'We’re checking your balance in the background so the writing desk always knows how many credits you have.';
+    }
+    if (availableCredits < 0.1) {
+      return 'Credits refresh every few seconds. If you drop below 0.1 credits you’ll need to top up before starting the next step.';
+    }
+    return 'Credits refresh every few seconds while you work and this balance updates automatically.';
+  }, [availableCredits]);
 
   const visibleLetterEvents = useMemo(
     () => letterEvents.slice(0, MAX_LETTER_REASONING_ITEMS),
@@ -1859,31 +1869,38 @@ export default function WritingDeskClient() {
             </div>
             <div className="header-actions">
               <span className="badge">Step {Math.min(currentStepNumber, totalSteps)} of {totalSteps}</span>
-              <div className={creditClassName} role="status" aria-live="polite" aria-label={creditAriaLabel}>
-                <svg
-                  className="credit-balance__icon"
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                  focusable="false"
-                >
-                  <path
-                    d="M4.5 7.5a3 3 0 013-3h9a3 3 0 013 3v9a3 3 0 01-3 3h-9a3 3 0 01-3-3v-9z"
-                    fill="currentColor"
-                    opacity="0.25"
-                  />
-                  <path
-                    d="M12 6v12m0-6h2.25a1.5 1.5 0 100-3H9.75a1.5 1.5 0 110-3H15"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                <div className="credit-balance__content">
-                  <span className="credit-balance__label">Credits</span>
-                  <span className="credit-balance__value">{creditDisplayValue}</span>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <div className={creditClassName} role="status" aria-live="polite" aria-label={creditAriaLabel}>
+                  <svg
+                    className="credit-balance__icon"
+                    viewBox="0 0 24 24"
+                    aria-hidden
+                    focusable="false"
+                  >
+                    <path
+                      d="M4.5 7.5a3 3 0 013-3h9a3 3 0 013 3v9a3 3 0 01-3 3h-9a3 3 0 01-3-3v-9z"
+                      fill="currentColor"
+                      opacity="0.25"
+                    />
+                    <path
+                      d="M12 6v12m0-6h2.25a1.5 1.5 0 100-3H9.75a1.5 1.5 0 110-3H15"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  <div className="credit-balance__content">
+                    <span className="credit-balance__label">Credits</span>
+                    <span className="credit-balance__value">{creditDisplayValue}</span>
+                  </div>
                 </div>
+                <InfoTooltip
+                  content={creditTooltipMessage}
+                  label="Credits status"
+                  placement="bottom"
+                />
               </div>
             </div>
           </div>
@@ -1901,7 +1918,18 @@ export default function WritingDeskClient() {
         {phase === 'initial' && currentStep && (
           <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void handleInitialNext(); }}>
             <div className="field">
-              <label htmlFor={`writing-step-${currentStep.key}`} className="label">{currentStep.title}</label>
+              <label
+                htmlFor={`writing-step-${currentStep.key}`}
+                className="label"
+                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                <span>{currentStep.title}</span>
+                <InfoTooltip
+                  content="Thorough context helps us craft precise prompts and gather the right research."
+                  label="Why detail matters"
+                  placement="right"
+                />
+              </label>
               <p className="label-sub">{currentStep.description}</p>
               <div className="input-with-mic">
                 <textarea
@@ -1914,11 +1942,19 @@ export default function WritingDeskClient() {
                   aria-invalid={!!error && !form[currentStep.key].trim()}
                   disabled={loading}
                 />
-                <div className="input-mic-button">
+                <div
+                  className="input-mic-button"
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}
+                >
                   <MicButton
                     onTranscriptionComplete={handleTranscriptionComplete}
                     disabled={loading}
                     size="sm"
+                  />
+                  <InfoTooltip
+                    content="Use your microphone to dictate your answer. We’ll transcribe it instantly."
+                    label="Dictate your response"
+                    placement="left"
                   />
                 </div>
               </div>
@@ -2023,11 +2059,19 @@ export default function WritingDeskClient() {
                   aria-invalid={!!error && !(followUpAnswers[followUpIndex]?.trim?.())}
                   disabled={loading}
                 />
-                <div className="input-mic-button">
+                <div
+                  className="input-mic-button"
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}
+                >
                   <MicButton
                     onTranscriptionComplete={handleFollowUpTranscriptionComplete}
                     disabled={loading}
                     size="sm"
+                  />
+                  <InfoTooltip
+                    content="Use speech-to-text if it’s faster to talk through your answer."
+                    label="Follow-up dictation hint"
+                    placement="left"
                   />
                 </div>
               </div>
@@ -2051,7 +2095,7 @@ export default function WritingDeskClient() {
               </div>
             )}
 
-            <div className="actions" style={{ marginTop: 12, display: 'flex', gap: 12 }}>
+            <div className="actions" style={{ marginTop: 12, display: 'flex', gap: 12, alignItems: 'center' }}>
               <button
                 type="button"
                 className="btn-link"
@@ -2060,13 +2104,22 @@ export default function WritingDeskClient() {
               >
                 Back
               </button>
-              <button
-                type="submit"
-                className="btn-primary"
-                disabled={loading}
-              >
-                {loading ? 'Saving…' : followUpIndex === followUps.length - 1 ? 'Save answers' : 'Next'}
-              </button>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={loading}
+                >
+                  {loading ? 'Saving…' : followUpIndex === followUps.length - 1 ? 'Save answers' : 'Next'}
+                </button>
+                <InfoTooltip
+                  content={followUpIndex === followUps.length - 1
+                    ? 'Saving locks in your answers and moves on to the research step.'
+                    : 'Move to the next follow-up question. You can come back and edit before saving.'}
+                  label="Follow-up progress details"
+                  placement="top"
+                />
+              </div>
             </div>
           </form>
         )}
@@ -2096,15 +2149,22 @@ export default function WritingDeskClient() {
                       <p style={{ color: '#b91c1c' }}>{researchError}</p>
                     </div>
                   )}
-                  <div style={{ marginTop: 12 }}>
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      onClick={handleRequestResearch}
-                      disabled={researchButtonDisabled}
-                    >
-                      {researchButtonLabel}
-                    </button>
+                  <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={handleRequestResearch}
+                        disabled={researchButtonDisabled}
+                      >
+                        {researchButtonLabel}
+                      </button>
+                      <InfoTooltip
+                        content={`Costs ${formatCredits(deepResearchCreditCost)} credits and usually takes a couple of minutes to gather and cite evidence.`}
+                        label="How deep research works"
+                        placement="right"
+                      />
+                    </div>
                     {researchCreditState === 'low' && (
                       <p style={{ marginTop: 8, color: '#b91c1c' }}>
                         You need at least {formatCredits(deepResearchCreditCost)} credits to run deep research.
@@ -2172,14 +2232,21 @@ export default function WritingDeskClient() {
                     gap: 12,
                   }}
                 >
-                  <button
-                    type="button"
-                    className="btn-link"
-                    onClick={() => setShowSummaryDetails((prev) => !prev)}
-                    disabled={loading}
-                  >
-                    {showSummaryDetails ? 'Hide intake details' : 'Show intake details'}
-                  </button>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <button
+                      type="button"
+                      className="btn-link"
+                      onClick={() => setShowSummaryDetails((prev) => !prev)}
+                      disabled={loading}
+                    >
+                      {showSummaryDetails ? 'Hide intake details' : 'Show intake details'}
+                    </button>
+                    <InfoTooltip
+                      content="Peek back at the answers you provided so you can double-check or edit them."
+                      label="What intake details shows"
+                      placement="top"
+                    />
+                  </div>
                   {responseId && !showSummaryDetails && (
                     <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>Reference ID: {responseId}</span>
                   )}
@@ -2235,7 +2302,7 @@ export default function WritingDeskClient() {
                         <p style={{ marginTop: 8 }}>No additional questions needed — we have enough detail for the next step.</p>
                       )}
                       {followUps.length > 0 && (
-                        <div className="actions" style={{ marginTop: 12 }}>
+                        <div className="actions" style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                           <button
                             type="button"
                             className="btn-link"
@@ -2244,6 +2311,11 @@ export default function WritingDeskClient() {
                           >
                             Ask for new follow-up questions
                           </button>
+                          <InfoTooltip
+                            content={`Regenerating uses another ${formatCredits(followUpCreditCost)} credits and replaces your existing follow-up answers.`}
+                            label="What happens when you ask for new questions"
+                            placement="top"
+                          />
                         </div>
                       )}
                       {notes && <p style={{ marginTop: 8, fontStyle: 'italic' }}>{notes}</p>}
@@ -2308,19 +2380,26 @@ export default function WritingDeskClient() {
                   {WRITING_DESK_LETTER_TONES.map((tone) => {
                     const toneInfo = LETTER_TONE_LABELS[tone];
                     return (
-                      <button
-                        key={tone}
-                        type="button"
-                        className="tone-option"
-                        data-tone={tone}
-                        onClick={() => handleToneSelect(tone)}
-                      >
-                        <span className="tone-option__badge" aria-hidden="true">
-                          {toneInfo.icon}
-                        </span>
-                        <span className="tone-option__label">{toneInfo.label}</span>
-                        <span className="tone-option__description">{toneInfo.description}</span>
-                      </button>
+                      <div key={tone} className="tone-option__wrapper">
+                        <button
+                          type="button"
+                          className="tone-option"
+                          data-tone={tone}
+                          onClick={() => handleToneSelect(tone)}
+                        >
+                          <span className="tone-option__badge" aria-hidden="true">
+                            {toneInfo.icon}
+                          </span>
+                          <span className="tone-option__label">{toneInfo.label}</span>
+                          <span className="tone-option__description">{toneInfo.description}</span>
+                        </button>
+                        <InfoTooltip
+                          content={`${toneInfo.label} — ${toneInfo.description}`}
+                          label={`${toneInfo.label} tone details`}
+                          placement="bottom"
+                          inlineHint={false}
+                        />
+                      </div>
                     );
                   })}
                 </div>
@@ -2335,6 +2414,21 @@ export default function WritingDeskClient() {
             {letterPhase === 'streaming' && (
               <div className="card" style={{ padding: 16, marginTop: 16 }}>
                 <h4 className="section-title" style={{ fontSize: '1.1rem' }}>Drafting your letter</h4>
+                <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn-link"
+                    onClick={() => setLetterReasoningVisible((prev) => !prev)}
+                  >
+                    {letterReasoningVisible ? 'Hide reasoning feed' : 'Show reasoning feed'}
+                  </button>
+                  <InfoTooltip
+                    content="We hide the reasoning once the draft arrives—turn it back on if you want to follow progress in real time."
+                    label="Reasoning feed guidance"
+                    placement="top"
+                    inlineHint={false}
+                  />
+                </div>
                 {letterStatus === 'generating' && letterStatusMessage && (
                   <div
                     className="research-progress"
@@ -2363,6 +2457,11 @@ export default function WritingDeskClient() {
                     )}
                   </div>
                 )}
+                {!letterReasoningVisible && (
+                  <p style={{ marginTop: 16, color: '#6b7280', fontSize: '0.9rem' }}>
+                    Reasoning updates are hidden. Toggle the feed back on if you want to monitor the assistant’s thinking.
+                  </p>
+                )}
                 <div style={{ marginTop: 16 }}>
                   <h5 style={{ margin: '0 0 8px 0', fontSize: '0.95rem' }}>Letter preview</h5>
                   <div
@@ -2387,44 +2486,68 @@ export default function WritingDeskClient() {
                     letterHtml={letterContentHtml}
                     metadata={letterMetadata}
                     leadingActions={
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={handleSaveLetter}
-                        disabled={
-                          isSavingLetter ||
-                          !letterResponseId ||
-                          !letterMetadata ||
-                          !letterContentHtml ||
-                          (savedLetterResponseId !== null && savedLetterResponseId === letterResponseId)
-                        }
-                        aria-busy={isSavingLetter}
-                      >
-                        {isSavingLetter
-                          ? 'Saving…'
-                          : savedLetterResponseId === letterResponseId
-                            ? 'Saved to my letters'
-                            : 'Save to my letters'}
-                      </button>
-                    }
-                    trailingActions={
-                      <>
-                        <button type="button" className="btn-secondary" onClick={handleRequestRecompose}>
-                          Recompose this letter
-                        </button>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
                         <button
                           type="button"
-                          className="btn-secondary"
-                          onClick={handleRequestExit}
-                          style={{
-                            backgroundColor: '#fee2e2',
-                            color: '#991b1b',
-                            border: '1px solid #fecaca'
-                          }}
+                          className="btn-primary"
+                          onClick={handleSaveLetter}
+                          disabled={
+                            isSavingLetter ||
+                            !letterResponseId ||
+                            !letterMetadata ||
+                            !letterContentHtml ||
+                            (savedLetterResponseId !== null && savedLetterResponseId === letterResponseId)
+                          }
+                          aria-busy={isSavingLetter}
                         >
-                          Exit writing desk
+                          {isSavingLetter
+                            ? 'Saving…'
+                            : savedLetterResponseId === letterResponseId
+                              ? 'Saved to my letters'
+                              : 'Save to my letters'}
                         </button>
-                      </>
+                        <InfoTooltip
+                          content="Adds this draft to My Letters with the reference ID so you can download or edit it later."
+                          label="What saving does"
+                          placement="bottom"
+                          inlineHint={false}
+                        />
+                      </div>
+                    }
+                    trailingActions={
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
+                          <button type="button" className="btn-secondary" onClick={handleRequestRecompose}>
+                            Recompose this letter
+                          </button>
+                          <InfoTooltip
+                            content="Creates a fresh version while keeping this draft saved so you can compare outcomes."
+                            label="What recompose does"
+                            placement="bottom"
+                            inlineHint={false}
+                          />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={handleRequestExit}
+                            style={{
+                              backgroundColor: '#fee2e2',
+                              color: '#991b1b',
+                              border: '1px solid #fecaca'
+                            }}
+                          >
+                            Exit writing desk
+                          </button>
+                          <InfoTooltip
+                            content="Closes the desk and returns you to the dashboard. Your current draft stays saved automatically."
+                            label="What happens when you exit"
+                            placement="bottom"
+                            inlineHint={false}
+                          />
+                        </div>
+                      </div>
                     }
                   />
                 </div>
@@ -2441,10 +2564,18 @@ export default function WritingDeskClient() {
               <div className="card" style={{ padding: 16, marginTop: 16 }}>
                 <h4 className="section-title" style={{ fontSize: '1.1rem', color: '#b91c1c' }}>We couldn&apos;t finish your letter</h4>
                 {letterError && <p style={{ marginTop: 8 }}>{letterError}</p>}
-                <div className="actions" style={{ marginTop: 16, display: 'flex', gap: 12 }}>
-                  <button type="button" className="btn-primary" onClick={handleShowToneSelection}>
-                    Try again
-                  </button>
+                <div className="actions" style={{ marginTop: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <button type="button" className="btn-primary" onClick={handleShowToneSelection}>
+                      Try again
+                    </button>
+                    <InfoTooltip
+                      content="If we spent any credits on the failed attempt we’ve already refunded them, so you can restart safely."
+                      label="Credit safety after errors"
+                      placement="top"
+                      inlineHint={false}
+                    />
+                  </div>
                   <button type="button" className="btn-secondary" onClick={() => setLetterPhase('idle')}>
                     Back to summary
                   </button>
@@ -2482,6 +2613,17 @@ export default function WritingDeskClient() {
           gap: 16px;
           margin-top: 16px;
           grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }
+
+        .tone-option__wrapper {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          align-items: flex-start;
+        }
+
+        .tone-option__wrapper .info-tooltip__inline {
+          margin-top: 0;
         }
 
         @media (max-width: 640px) {

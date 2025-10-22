@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import InfoTooltip from '../../../components/InfoTooltip';
 import { letterHtmlToPlainText } from '../utils/composeLetterHtml';
 import type { WritingDeskLetterPayload } from '../types';
 
@@ -245,31 +246,55 @@ export function LetterViewer({
         }}
       >
         {leadingActions}
-        <button type="button" className="btn-primary" onClick={handleCopy}>
-          {copyState === 'copied'
-            ? 'Copied!'
-            : copyState === 'error'
-              ? 'Copy failed — try again'
-              : 'Copy for email'}
-        </button>
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={handleDownloadPdf}
-          disabled={isDownloadingPdf}
-          aria-busy={isDownloadingPdf}
-        >
-          {isDownloadingPdf ? 'Preparing PDF...' : 'Download PDF'}
-        </button>
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={handleDownloadDocx}
-          disabled={isDownloadingDocx}
-          aria-busy={isDownloadingDocx}
-        >
-          {isDownloadingDocx ? 'Preparing DOCX...' : 'Download DOCX'}
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
+          <button type="button" className="btn-primary" onClick={handleCopy}>
+            {copyState === 'copied'
+              ? 'Copied!'
+              : copyState === 'error'
+                ? 'Copy failed — try again'
+                : 'Copy for email'}
+          </button>
+          <InfoTooltip
+            content="Copies both the formatted letter and plain text to your clipboard when supported."
+            label="Copy export details"
+            placement="top"
+            inlineHint={false}
+          />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleDownloadPdf}
+            disabled={isDownloadingPdf}
+            aria-busy={isDownloadingPdf}
+          >
+            {isDownloadingPdf ? 'Preparing PDF...' : 'Download PDF'}
+          </button>
+          <InfoTooltip
+            content="Generates a PDF in the background — stay on the page until the download starts."
+            label="PDF download info"
+            placement="top"
+            inlineHint={false}
+          />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleDownloadDocx}
+            disabled={isDownloadingDocx}
+            aria-busy={isDownloadingDocx}
+          >
+            {isDownloadingDocx ? 'Preparing DOCX...' : 'Download DOCX'}
+          </button>
+          <InfoTooltip
+            content="Creates a Word-friendly DOCX file — generation can take a few seconds before the download begins."
+            label="DOCX download info"
+            placement="top"
+            inlineHint={false}
+          />
+        </div>
         {trailingActions}
       </div>
     </div>

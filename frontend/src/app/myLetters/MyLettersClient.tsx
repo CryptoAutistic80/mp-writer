@@ -8,6 +8,7 @@ import {
 } from '../../features/my-letters/hooks/useMyLettersQuery';
 import type { SavedLetterSummary } from '../../features/my-letters/api/listLetters';
 import type { WritingDeskLetterTone } from '../../features/writing-desk/types';
+import InfoTooltip from '../../components/InfoTooltip';
 
 const TONE_LABELS: Record<string, string> = {
   formal: 'Formal',
@@ -224,7 +225,15 @@ export default function MyLettersClient() {
                 }}
               >
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <span style={{ fontWeight: 600 }}>From</span>
+                  <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    From
+                    <InfoTooltip
+                      content="Limit the list to drafts saved on or after this date."
+                      label="From date filter info"
+                      placement="top"
+                      inlineHint={false}
+                    />
+                  </span>
                   <input
                     type="date"
                     value={fromDate}
@@ -238,7 +247,15 @@ export default function MyLettersClient() {
                   />
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <span style={{ fontWeight: 600 }}>To</span>
+                  <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    To
+                    <InfoTooltip
+                      content="Show letters saved up to and including this date."
+                      label="To date filter info"
+                      placement="top"
+                      inlineHint={false}
+                    />
+                  </span>
                   <input
                     type="date"
                     value={toDate}
@@ -299,6 +316,12 @@ export default function MyLettersClient() {
                     </div>
                     <div style={{ color: '#6b7280' }}>Page {currentPage} of {Math.max(1, meta.totalPages)}</div>
                   </div>
+                  <InfoTooltip
+                    content="Use the arrows to move between saved letters. We’ll automatically move to the next or previous page when you reach the end."
+                    label="Letter navigation help"
+                    placement="top"
+                    inlineHint={false}
+                  />
                   <button
                     type="button"
                     onClick={handleNextLetter}
@@ -346,9 +369,17 @@ export default function MyLettersClient() {
                   <h3 style={{ fontSize: '1.25rem', marginBottom: 4 }}>
                     {selectedMpName ? `Letter to ${selectedMpName}` : 'Drafted letter'}
                   </h3>
-                  <p style={{ margin: 0, color: '#6b7280' }}>
-                    Tone: {selectedToneLabel} · Saved on {selectedDisplayDate}
-                  </p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <p style={{ margin: 0, color: '#6b7280' }}>
+                      Tone: {selectedToneLabel} · Saved on {selectedDisplayDate}
+                    </p>
+                    <InfoTooltip
+                      content="Tone is recorded from the draft metadata. Recompose the letter in the writing desk if you need to change it."
+                      label="Tone metadata details"
+                      placement="top"
+                      inlineHint={false}
+                    />
+                  </div>
                   {selectedLetter.responseId && (
                     <p style={{ margin: '4px 0 0', color: '#9ca3af', fontSize: '0.9rem' }}>
                       Reference ID: {selectedLetter.responseId}
@@ -389,6 +420,12 @@ export default function MyLettersClient() {
                     </div>
                     <div style={{ color: '#6b7280' }}>Page {currentPage} of {Math.max(1, meta.totalPages)}</div>
                   </div>
+                  <InfoTooltip
+                    content="Navigation arrows continue into the next or previous page when you reach the end of the current list."
+                    label="Letter navigation help"
+                    placement="top"
+                    inlineHint={false}
+                  />
                   <button
                     type="button"
                     onClick={handleNextLetter}

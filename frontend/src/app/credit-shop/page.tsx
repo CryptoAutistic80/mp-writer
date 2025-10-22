@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import InfoTooltip from '../../components/InfoTooltip';
 
 type CreditState = {
   credits: number | null;
@@ -179,6 +180,9 @@ export default function CreditShopPage() {
                   {packages.map((pkg) => {
                     const isProcessing = state.status === 'loading' && state.pendingCredits === pkg.credits;
                     const processingLabel = STRIPE_CHECKOUT_ENABLED ? 'Redirecting to checkout…' : 'Processing purchase…';
+                    const tooltipMessage = STRIPE_CHECKOUT_ENABLED
+                      ? 'Redirects to secure Stripe checkout — credits land in your balance right after payment clears.'
+                      : 'Applies credits to your balance immediately once the payment succeeds.';
                     return (
                       <div
                         key={pkg.credits}
@@ -189,15 +193,22 @@ export default function CreditShopPage() {
                         <p style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600 }}>
                           {formatPrice(pkg.amount, pkg.currency)}
                         </p>
-                        <button
-                          type="button"
-                          className="btn-primary"
-                          onClick={() => handlePurchase(pkg.credits)}
-                          disabled={state.status === 'loading'}
-                          style={{ marginTop: 'auto' }}
-                        >
-                          {isProcessing ? processingLabel : `Buy for ${formatPrice(pkg.amount, pkg.currency)}`}
-                        </button>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, marginTop: 'auto' }}>
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            onClick={() => handlePurchase(pkg.credits)}
+                            disabled={state.status === 'loading'}
+                          >
+                            {isProcessing ? processingLabel : `Buy for ${formatPrice(pkg.amount, pkg.currency)}`}
+                          </button>
+                          <InfoTooltip
+                            content={tooltipMessage}
+                            label="How purchases work"
+                            placement="top"
+                            inlineHint={false}
+                          />
+                        </div>
                       </div>
                     );
                   })}
@@ -209,16 +220,24 @@ export default function CreditShopPage() {
                 </p>
               )}
               {state.message && (
-                <p
-                  role={state.status === 'error' ? 'alert' : undefined}
-                  style={{
-                    margin: 0,
-                    color: state.status === 'error' ? '#b91c1c' : '#166534',
-                    fontWeight: 500,
-                  }}
-                >
-                  {state.message}
-                </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <p
+                    role={state.status === 'error' ? 'alert' : undefined}
+                    style={{
+                      margin: 0,
+                      color: state.status === 'error' ? '#b91c1c' : '#166534',
+                      fontWeight: 500,
+                    }}
+                  >
+                    {state.message}
+                  </p>
+                  <InfoTooltip
+                    content="If credits don’t show straight away, refresh the dashboard or give it a few seconds to sync."
+                    label="Credit refresh info"
+                    placement="top"
+                    inlineHint={false}
+                  />
+                </div>
               )}
               {typeof state.credits === 'number' && (
                 <p style={{ margin: 0 }}>You now have {formatCredits(state.credits)} credits available.</p>
