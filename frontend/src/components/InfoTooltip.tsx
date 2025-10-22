@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent, ReactNode } from 'react';
 
 type InfoTooltipProps = {
@@ -29,7 +29,9 @@ export function InfoTooltip({
   const [hoverVisible, setHoverVisible] = useState(false);
   const [touchVisible, setTouchVisible] = useState(false);
   const containerRef = useRef<HTMLSpanElement | null>(null);
+  const bubbleRef = useRef<HTMLSpanElement | null>(null);
   const closeTimerRef = useRef<number | null>(null);
+  const [alignment, setAlignment] = useState<'center' | 'start' | 'end'>('center');
 
   useEffect(() => {
     return () => {
@@ -57,6 +59,41 @@ export function InfoTooltip({
   }, [touchVisible]);
 
   const visible = hoverVisible || touchVisible;
+
+  useEffect(() => {
+    if (!visible) {
+      setAlignment('center');
+    }
+  }, [visible]);
+
+  useLayoutEffect(() => {
+    if (!visible || typeof window === 'undefined') return;
+    const bubble = bubbleRef.current;
+    if (!bubble) return;
+
+    const detectOverflow = () => {
+      const rect = bubble.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      let next: 'center' | 'start' | 'end' = 'center';
+      if (placement === 'left' || placement === 'right') {
+        if (rect.top < 12) next = 'start';
+        else if (rect.bottom > viewportHeight - 12) next = 'end';
+      } else {
+        if (rect.left < 12) next = 'start';
+        else if (rect.right > viewportWidth - 12) next = 'end';
+      }
+      setAlignment((prev) => (prev === next ? prev : next));
+    };
+
+    const frame = window.requestAnimationFrame(detectOverflow);
+    const handleResize = () => detectOverflow();
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [visible, placement]);
 
   const resolvedTrigger = trigger ?? (
     <span className="info-tooltip__icon" aria-hidden="true">i</span>
@@ -107,10 +144,12 @@ export function InfoTooltip({
         {resolvedTrigger}
       </button>
       <span
+        ref={bubbleRef}
         id={tooltipId}
         role="tooltip"
         className={`info-tooltip__bubble info-tooltip__bubble--${placement}`}
         data-state={visible ? 'visible' : 'hidden'}
+        data-align={alignment}
       >
         {content}
       </span>
