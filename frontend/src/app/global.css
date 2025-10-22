@@ -1662,7 +1662,7 @@ body {
   position: absolute;
   z-index: 40;
   min-width: 200px;
-  max-width: min(320px, 80vw);
+  max-width: min(320px, calc(100vw - 32px));
   padding: 12px 14px;
   background: rgba(17, 24, 39, 0.94);
   color: #f8fafc;
@@ -1773,14 +1773,24 @@ body {
 }
 
 @media (hover: none), (pointer: coarse) {
-  .info-tooltip__inline {
-    display: block;
-  }
-  .info-tooltip__bubble {
-    display: none;
-  }
   .info-tooltip {
     align-items: flex-start;
+  }
+  .info-tooltip__bubble {
+    max-width: min(320px, calc(100vw - 24px));
+    transform: translate(-50%, -4px) scale(0.98);
+    line-height: 1.45;
+    font-size: 0.9rem;
+    padding: 14px 16px;
+  }
+  .info-tooltip__bubble[data-state='visible'] {
+    transform: translate(-50%, -12px) scale(1);
+  }
+  .info-tooltip[data-inline='true'] .info-tooltip__inline {
+    display: block;
+  }
+  .info-tooltip[data-inline='true'] .info-tooltip__bubble {
+    display: none;
   }
 }
 

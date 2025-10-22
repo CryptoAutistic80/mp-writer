@@ -22,7 +22,7 @@ export function InfoTooltip({
   trigger,
   className,
   placement = 'top',
-  inlineHint = true,
+  inlineHint = false,
 }: InfoTooltipProps) {
   const generatedId = useId();
   const tooltipId = useMemo(() => `info-tooltip-${generatedId}`, [generatedId]);
@@ -68,6 +68,7 @@ export function InfoTooltip({
       className={`info-tooltip${className ? ` ${className}` : ''}`}
       data-placement={placement}
       data-visible={visible ? 'true' : 'false'}
+      data-inline={inlineHint ? 'true' : 'false'}
     >
       <button
         type="button"
