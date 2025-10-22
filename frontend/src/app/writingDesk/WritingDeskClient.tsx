@@ -20,9 +20,10 @@ import {
   WRITING_DESK_LETTER_TONES,
 } from '../../features/writing-desk/types';
 import { fetchSavedLetters, saveLetter, startLetterComposition } from '../../features/writing-desk/api/letter';
-import { composeLetterHtml, letterHtmlToPlainText } from '../../features/writing-desk/utils/composeLetterHtml';
+import { composeLetterHtml } from '../../features/writing-desk/utils/composeLetterHtml';
 import { MicButton } from '../../components/audio/MicButton';
 import { Toast } from '../../components/Toast';
+import { copyLetterToClipboard, downloadLetterAsDocx, downloadLetterAsPdf, normaliseLetterHtml } from '../../features/writing-desk/utils/letterPresentation';
 
 type StepKey = 'issueDescription';
 
@@ -114,54 +115,6 @@ type LetterStreamMessage =
   | { type: 'letter_delta'; html: string }
   | { type: 'complete'; letter: WritingDeskLetterPayload; remainingCredits: number | null }
   | { type: 'error'; message: string; remainingCredits?: number | null };
-
-const LETTER_DOCUMENT_CSS = `
-  @page {
-    margin: 15mm;
-  }
-
-  body {
-    font-family: "Times New Roman", serif;
-    font-size: 12pt;
-    line-height: 1.5;
-    color: #111827;
-    margin: 0;
-    background: #ffffff;
-  }
-
-  .letter-document {
-    box-sizing: border-box;
-    max-width: 180mm;
-    margin: 0 auto;
-    padding: 15mm;
-  }
-
-  .letter-document p {
-    margin: 0 0 12pt 0;
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-
-  .letter-document ul,
-  .letter-document ol {
-    margin: 0 0 12pt 20pt;
-    padding: 0;
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-
-  .letter-document li {
-    margin: 0 0 6pt 0;
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-
-  .letter-document a {
-    color: #1d4ed8;
-    text-decoration: underline;
-    word-break: break-word;
-  }
-`;
 
 const createLetterRunId = () => {
   if (typeof window !== 'undefined' && window.crypto && typeof window.crypto.randomUUID === 'function') {
@@ -407,68 +360,7 @@ export default function WritingDeskClient() {
     };
   }, [hasHandledInitialJob, letterMetadata?.responseId, letterResponseId]);
 
-  const letterHtmlForExport = useMemo(() => {
-    if (typeof letterContentHtml !== 'string' || letterContentHtml.trim().length === 0) {
-      return '<p>No content available.</p>';
-    }
-    return letterContentHtml;
-  }, [letterContentHtml]);
-
-  const letterDocumentBodyHtml = useMemo(
-    () => `<div class="letter-document">${letterHtmlForExport}</div>`,
-    [letterHtmlForExport],
-  );
-
-  const letterDocxHtml = useMemo(
-    () =>
-      `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8" />
-<style>
-${LETTER_DOCUMENT_CSS}
-</style>
-</head>
-<body>
-${letterDocumentBodyHtml}
-</body>
-</html>`,
-    [letterDocumentBodyHtml],
-  );
-
-  const resolveDownloadFilename = useCallback(
-    (extension: 'pdf' | 'docx') => {
-      const mpName =
-        typeof letterMetadata?.mpName === 'string' ? letterMetadata.mpName.trim() : '';
-      const dateValue =
-        typeof letterMetadata?.date === 'string' && letterMetadata.date.trim().length > 0
-          ? letterMetadata.date.trim()
-          : new Date().toISOString().slice(0, 10);
-      const baseParts = [mpName, dateValue].filter((part) => part.length > 0);
-      const baseRaw = baseParts.join('-') || 'mp-letter';
-      const slug = baseRaw
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '');
-      const safeBase = slug.length > 0 ? slug : 'mp-letter';
-      return `${safeBase}.${extension}`;
-    },
-    [letterMetadata],
-  );
-
-  const triggerBlobDownload = useCallback((blob: Blob, filename: string) => {
-    if (typeof window === 'undefined') return;
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.setTimeout(() => {
-      URL.revokeObjectURL(url);
-    }, 0);
-  }, []);
+  const letterHtmlForExport = useMemo(() => normaliseLetterHtml(letterContentHtml), [letterContentHtml]);
 
   const currentStep = phase === 'initial' ? steps[stepIndex] ?? null : null;
   const followUpCreditCost = 0.1;
@@ -1924,90 +1816,36 @@ ${letterDocumentBodyHtml}
       return;
     }
     try {
-      if (typeof window !== 'undefined' && 'ClipboardItem' in window && navigator.clipboard && 'write' in navigator.clipboard) {
-        const htmlBlob = new Blob([letterContentHtml], { type: 'text/html' });
-        const plainText = letterHtmlToPlainText(letterContentHtml);
-        const textBlob = new Blob([plainText], { type: 'text/plain' });
-        const item = new (window as any).ClipboardItem({ 'text/html': htmlBlob, 'text/plain': textBlob });
-        await (navigator.clipboard as any).write([item]);
-      } else if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(letterHtmlToPlainText(letterContentHtml));
-      } else {
-        throw new Error('Clipboard API not available');
-      }
+      await copyLetterToClipboard(letterContentHtml);
       setLetterCopyState('copied');
     } catch (error) {
-      try {
-        if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(letterHtmlToPlainText(letterContentHtml));
-          setLetterCopyState('copied');
-          return;
-        }
-      } catch {
-        // ignore nested failure
-      }
       setLetterCopyState('error');
     }
   }, [letterContentHtml]);
 
   const handleDownloadDocx = useCallback(async () => {
-    if (isDownloadingDocx || typeof window === 'undefined') return;
+    if (isDownloadingDocx) return;
     setIsDownloadingDocx(true);
     try {
-      const htmlDocxModule = await import('html-docx-js/dist/html-docx.js');
-      const htmlDocx = (htmlDocxModule.default ?? htmlDocxModule) as { asBlob: (input: string) => Blob };
-      const blob = htmlDocx.asBlob(letterDocxHtml);
-      triggerBlobDownload(blob, resolveDownloadFilename('docx'));
+      await downloadLetterAsDocx(letterHtmlForExport, letterMetadata);
     } catch (error) {
       console.error('Failed to generate DOCX export', error);
     } finally {
       setIsDownloadingDocx(false);
     }
-  }, [isDownloadingDocx, letterDocxHtml, resolveDownloadFilename, triggerBlobDownload]);
+  }, [isDownloadingDocx, letterHtmlForExport, letterMetadata]);
 
   const handleDownloadPdf = useCallback(async () => {
-    if (isDownloadingPdf || typeof window === 'undefined') return;
+    if (isDownloadingPdf) return;
     setIsDownloadingPdf(true);
-    const container = document.createElement('div');
-    let appended = false;
     try {
-      container.style.position = 'fixed';
-      container.style.left = '-9999px';
-      container.style.top = '0';
-      container.style.width = '210mm';
-      container.style.padding = '0';
-      container.style.margin = '0';
-      container.style.background = '#ffffff';
-      container.style.zIndex = '-1';
-      container.setAttribute('aria-hidden', 'true');
-      container.innerHTML = `<style>${LETTER_DOCUMENT_CSS}</style>${letterDocumentBodyHtml}`;
-      document.body.appendChild(container);
-      appended = true;
-      const target = container.querySelector('.letter-document') as HTMLElement | null;
-      if (!target) {
-        throw new Error('Unable to locate letter content for export');
-      }
-      const html2pdfModule = (await import('html2pdf.js')) as any;
-      const html2pdf = html2pdfModule.default ?? html2pdfModule;
-      await html2pdf()
-        .set({
-          margin: [15, 15, 15, 15],
-          filename: resolveDownloadFilename('pdf'),
-          pagebreak: { mode: ['css', 'legacy'] },
-          html2canvas: { scale: 2, useCORS: true, logging: false },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        })
-        .from(target)
-        .save();
+      await downloadLetterAsPdf(letterHtmlForExport, letterMetadata);
     } catch (error) {
       console.error('Failed to generate PDF export', error);
     } finally {
-      if (appended && container.parentNode) {
-        container.parentNode.removeChild(container);
-      }
       setIsDownloadingPdf(false);
     }
-  }, [isDownloadingPdf, letterDocumentBodyHtml, resolveDownloadFilename]);
+  }, [isDownloadingPdf, letterHtmlForExport, letterMetadata]);
 
   return (
     <>
