@@ -46,6 +46,7 @@
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
+    "@nestjs-modules/ioredis": "^2.0.2",
     "@nestjs/common": "^11.1.6",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.1.6",
@@ -55,6 +56,7 @@
     "@nestjs/platform-express": "^11.0.0",
     "@nestjs/terminus": "^11.0.0",
     "@nestjs/throttler": "^6.3.0",
+    "@nestjs/throttler-storage-redis": "npm:@nest-lab/throttler-storage-redis@^1.1.0",
     "@tanstack/react-query": "^5.90.2",
     "axios": "^1.6.0",
     "class-transformer": "^0.5.1",
@@ -62,6 +64,7 @@
     "helmet": "^7.1.0",
     "html-docx-js": "^0.3.1",
     "html2pdf.js": "^0.12.1",
+    "ioredis": "^5.8.2",
     "mongoose": "^8.18.0",
     "next": "~15.2.4",
     "openai": "^4.56.0",
