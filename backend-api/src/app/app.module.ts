@@ -4,10 +4,11 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { TerminusModule } from '@nestjs/terminus';
 import { AppService } from './app.service';
 import { AppController } from './app.controller';
-import { NestModulesModule } from '@mp-writer/nest-modules';
 import { HealthController } from './health.controller';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
+import { RedisClientService, RedisModule } from '@mp-writer/nest-modules';
+import { ThrottlerStorageRedisService } from '@nestjs/throttler-storage-redis';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
 import { PurchasesModule } from '../purchases/purchases.module';
@@ -22,6 +23,8 @@ import { EncryptionService } from '../crypto/encryption.service';
 import { WritingDeskJobsModule } from '../writing-desk-jobs/writing-desk-jobs.module';
 import { CheckoutModule } from '../checkout/checkout.module';
 import { UserSavedLettersModule } from '../user-saved-letters/user-saved-letters.module';
+
+const THROTTLER_STORAGE_TOKEN = 'THROTTLER_STORAGE_REDIS';
 
 function validateConfig(config: Record<string, unknown>) {
   const errors: string[] = [];
@@ -41,6 +44,7 @@ function validateConfig(config: Record<string, unknown>) {
   };
 
   requireString('MONGO_URI');
+  requireString('REDIS_URL');
   requireString('JWT_SECRET', { minLength: 32, forbid: ['changeme'] });
 
   const dek = config.DATA_ENCRYPTION_KEY;
@@ -75,14 +79,21 @@ function validateConfig(config: Record<string, unknown>) {
       validate: validateConfig,
     }),
     TerminusModule,
-    ThrottlerModule.forRoot([{ ttl: 60, limit: 60 }]),
+    RedisModule,
+    ThrottlerModule.forRootAsync({
+      imports: [RedisModule],
+      inject: [THROTTLER_STORAGE_TOKEN],
+      useFactory: (storage: ThrottlerStorageRedisService) => ({
+        throttlers: [{ ttl: 60, limit: 60 }],
+        storage,
+      }),
+    }),
     MongooseModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         uri: config.get<string>('MONGO_URI', 'mongodb://localhost:27017/mp_writer'),
       }),
     }),
-    NestModulesModule,
     CryptoModule,
     UsersModule,
     AuthModule,
@@ -100,6 +111,16 @@ function validateConfig(config: Record<string, unknown>) {
   controllers: [AppController, HealthController],
   providers: [
     AppService,
+    {
+      provide: THROTTLER_STORAGE_TOKEN,
+      inject: [RedisClientService],
+      useFactory: (redisClientService: RedisClientService) =>
+        new ThrottlerStorageRedisService(redisClientService.getClient()),
+    },
+    {
+      provide: ThrottlerStorageRedisService,
+      useExisting: THROTTLER_STORAGE_TOKEN,
+    },
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
