@@ -8,6 +8,7 @@ import { WritingDeskJobsService } from '../writing-desk-jobs/writing-desk-jobs.s
 import { UserMpService } from '../user-mp/user-mp.service';
 import { UsersService } from '../users/users.service';
 import { UserAddressService } from '../user-address-store/user-address.service';
+import { AiRunMetadata, AiRunStore, AiRunStreamEntry } from './ai-run.store';
 import {
   ActiveWritingDeskJobResource,
   WritingDeskLetterStatus,
@@ -58,6 +59,10 @@ interface DeepResearchRun {
   cleanupTimer: NodeJS.Timeout | null;
   promise: Promise<void> | null;
   responseId: string | null;
+  lockToken: string | null;
+  leader: boolean;
+  streamCursor: string | null;
+  tailTask: Promise<void> | null;
 }
 
 type ResponseStreamLike = AsyncIterable<ResponseStreamEvent> & {
@@ -70,6 +75,8 @@ const BACKGROUND_POLL_INTERVAL_MS = 2000;
 const BACKGROUND_POLL_TIMEOUT_MS = 20 * 60 * 1000;
 const LETTER_RUN_BUFFER_SIZE = 2000;
 const LETTER_RUN_TTL_MS = 5 * 60 * 1000;
+const RUN_STREAM_BLOCK_MS = 1000;
+const RUN_STREAM_IDLE_DELAY_MS = 250;
 
 type LetterStreamPayload =
   | { type: 'status'; status: string; remainingCredits?: number | null }
@@ -142,6 +149,10 @@ interface LetterRun {
   promise: Promise<void> | null;
   responseId: string | null;
   remainingCredits: number | null;
+  lockToken: string | null;
+  leader: boolean;
+  streamCursor: string | null;
+  tailTask: Promise<void> | null;
 }
 
 interface LetterDocumentInput {
@@ -380,6 +391,7 @@ export class AiService {
     private readonly userMp: UserMpService,
     private readonly users: UsersService,
     private readonly userAddress: UserAddressService,
+    private readonly runStore: AiRunStore,
   ) {}
 
   private async getOpenAiClient(apiKey: string) {
@@ -737,13 +749,37 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         if (existing.cleanupTimer) {
           clearTimeout(existing.cleanupTimer);
         }
+        if (existing.tailTask) {
+          existing.tailTask.catch(() => undefined);
+        }
+        await this.runStore.releaseRunLock('letter', existing.key, existing.lockToken);
         existing.subject.complete();
         this.letterRuns.delete(key);
       } else {
         return existing;
       }
-    } else if (options?.createIfMissing === false) {
-      throw new BadRequestException('We could not resume letter composition. Please start a new letter.');
+    }
+
+    let storedStatePromise: Promise<{
+      metadata: AiRunMetadata | null;
+      entries: Array<AiRunStreamEntry<LetterStreamPayload>>;
+    }> | null = null;
+
+    const loadStoredState = () => {
+      if (!storedStatePromise) {
+        storedStatePromise = Promise.all([
+          this.runStore.getMetadata('letter', key),
+          this.runStore.getStreamEntries<LetterStreamPayload>('letter', key),
+        ]).then(([metadata, entries]) => ({ metadata, entries }));
+      }
+      return storedStatePromise;
+    };
+
+    if (!existing && options?.createIfMissing === false) {
+      const { metadata, entries } = await loadStoredState();
+      if (!metadata && entries.length === 0) {
+        throw new BadRequestException('We could not resume letter composition. Please start a new letter.');
+      }
     }
 
     const tone = this.normaliseLetterTone(options?.tone ?? baselineJob.letterTone ?? null);
@@ -769,20 +805,65 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       promise: null,
       responseId: null,
       remainingCredits: null,
+      lockToken: null,
+      leader: false,
+      streamCursor: null,
+      tailTask: null,
     };
 
     this.letterRuns.set(key, run);
 
-    run.promise = this.executeLetterRun({
-      run,
-      userId,
-      baselineJob,
-      subject,
-      researchContent,
-    }).catch((error) => {
-      this.logger.error(`Letter run encountered an unhandled error: ${(error as Error)?.message ?? error}`);
-      subject.error(error);
-    });
+    const lockToken = await this.runStore.acquireRunLock('letter', key, LETTER_RUN_TTL_MS);
+    if (lockToken) {
+      run.leader = true;
+      run.lockToken = lockToken;
+      run.streamCursor = '0-0';
+
+      await this.runStore.clearRun('letter', key);
+      await this.runStore.setMetadata(
+        'letter',
+        key,
+        { status: 'running', responseId: null, remainingCredits: null, updatedAt: Date.now() },
+        LETTER_RUN_TTL_MS,
+      );
+
+      run.promise = this.executeLetterRun({
+        run,
+        userId,
+        baselineJob,
+        subject,
+        researchContent,
+      })
+        .catch((error) => {
+          this.logger.error(`Letter run encountered an unhandled error: ${(error as Error)?.message ?? error}`);
+          subject.error(error);
+        })
+        .finally(async () => {
+          await this.runStore.releaseRunLock('letter', key, run.lockToken);
+          await this.runStore.applyTtl('letter', key, LETTER_RUN_TTL_MS);
+        });
+
+      return run;
+    }
+
+    const { metadata, entries } = await loadStoredState();
+    this.applyLetterRunMetadata(run, metadata);
+    await this.emitStoredLetterEvents(run, entries);
+    await this.runStore.applyTtl('letter', key, LETTER_RUN_TTL_MS);
+
+    if (options?.restart) {
+      throw new BadRequestException('Letter composition is already running. Please wait for it to finish.');
+    }
+
+    if (run.status === 'running') {
+      run.tailTask = this.tailLetterRunStream(run).catch((error) => {
+        this.logger.warn(
+          `[writing-desk letter] Failed to follow run ${run.key}: ${(error as Error)?.message ?? error}`,
+        );
+      });
+    } else {
+      this.scheduleLetterRunCleanup(run);
+    }
 
     return run;
   }
@@ -805,8 +886,8 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
     let lastPersistedContent: string | null = null;
     let lastPersistedAt = 0;
 
-    const send = (payload: LetterStreamPayload) => {
-      subject.next(payload);
+    const send = async (payload: LetterStreamPayload) => {
+      await this.publishLetterRunPayload(run, payload);
     };
 
     const persistProgressIfNeeded = async (html: string) => {
@@ -848,7 +929,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         json: null,
       });
 
-      send({ type: 'status', status: 'Composing your letter…', remainingCredits });
+      await send({ type: 'status', status: 'Composing your letter…', remainingCredits });
 
       const apiKey = this.config.get<string>('OPENAI_API_KEY');
       const model = this.config.get<string>('OPENAI_LETTER_MODEL')?.trim() || 'gpt-5';
@@ -894,8 +975,8 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         });
         run.status = 'completed';
         _settled = true;
-        send({ type: 'letter_delta', html: stubDocument });
-        send({
+        await send({ type: 'letter_delta', html: stubDocument });
+        await send({
           type: 'complete',
           letter: this.toLetterCompletePayload(
             { ...stub, letter_content: stubDocument },
@@ -959,7 +1040,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
             'Ensuring all the key points are covered…'
           ];
           const randomMessage = quietStatusMessages[Math.floor(Math.random() * quietStatusMessages.length)];
-          send({ type: 'event', event: { type: 'quiet_period', message: randomMessage } });
+          await send({ type: 'event', event: { type: 'quiet_period', message: randomMessage } });
           startQuietPeriodTimer(); // Reset the timer
         }, 5000); // 5 seconds of inactivity
       };
@@ -976,7 +1057,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         const eventType = typeof normalised.type === 'string' ? normalised.type : null;
 
         if (eventType?.startsWith('response.reasoning')) {
-          send({ type: 'event', event: normalised });
+          await send({ type: 'event', event: normalised });
           continue;
         }
 
@@ -984,7 +1065,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           const delta = this.extractOutputTextDelta(normalised);
           if (delta) {
             jsonBuffer += delta;
-            send({ type: 'delta', text: delta });
+            await send({ type: 'delta', text: delta });
             const preview = this.extractLetterPreview(jsonBuffer);
             if (preview !== null) {
               const subjectPreview = this.extractSubjectLinePreview(jsonBuffer);
@@ -1008,7 +1089,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
               senderTelephone: context.senderTelephone,
               references: this.extractReferencesFromJson(jsonBuffer),
             });
-              send({ type: 'letter_delta', html: previewDocument });
+              await send({ type: 'letter_delta', html: previewDocument });
               await persistProgressIfNeeded(previewDocument);
             }
           }
@@ -1039,7 +1120,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
               senderTelephone: context.senderTelephone,
               references: this.extractReferencesFromJson(jsonBuffer),
             });
-            send({ type: 'letter_delta', html: previewDocument });
+            await send({ type: 'letter_delta', html: previewDocument });
             await persistProgressIfNeeded(previewDocument);
           }
           continue;
@@ -1103,8 +1184,8 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
 
           run.status = 'completed';
           _settled = true;
-          send({ type: 'letter_delta', html: finalDocument });
-          send({
+          await send({ type: 'letter_delta', html: finalDocument });
+          await send({
             type: 'complete',
             letter: this.toLetterCompletePayload(
               { ...merged, letter_content: finalDocument },
@@ -1232,7 +1313,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           ? error.message
           : 'Letter composition failed. Please try again in a few moments.';
 
-      send({ type: 'error', message, remainingCredits });
+      await send({ type: 'error', message, remainingCredits });
       subject.complete();
       
       // Clean up the quiet period timer
@@ -1248,6 +1329,18 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           // ignore
         }
       }
+
+      await this.runStore.setMetadata(
+        'letter',
+        run.key,
+        {
+          status: run.status,
+          responseId: run.responseId,
+          remainingCredits: run.remainingCredits,
+          updatedAt: Date.now(),
+        },
+        LETTER_RUN_TTL_MS,
+      );
 
       this.scheduleLetterRunCleanup(run);
     }
@@ -1296,13 +1389,37 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         if (existing.cleanupTimer) {
           clearTimeout(existing.cleanupTimer);
         }
+        if (existing.tailTask) {
+          existing.tailTask.catch(() => undefined);
+        }
+        await this.runStore.releaseRunLock('deep-research', existing.key, existing.lockToken);
         existing.subject.complete();
         this.deepResearchRuns.delete(key);
       } else {
         return existing;
       }
-    } else if (options?.createIfMissing === false) {
-      throw new BadRequestException('We could not resume deep research. Please start a new run.');
+    }
+
+    let storedStatePromise: Promise<{
+      metadata: AiRunMetadata | null;
+      entries: Array<AiRunStreamEntry<DeepResearchStreamPayload>>;
+    }> | null = null;
+
+    const loadStoredState = () => {
+      if (!storedStatePromise) {
+        storedStatePromise = Promise.all([
+          this.runStore.getMetadata('deep-research', key),
+          this.runStore.getStreamEntries<DeepResearchStreamPayload>('deep-research', key),
+        ]).then(([metadata, entries]) => ({ metadata, entries }));
+      }
+      return storedStatePromise;
+    };
+
+    if (!existing && options?.createIfMissing === false) {
+      const { metadata, entries } = await loadStoredState();
+      if (!metadata && entries.length === 0) {
+        throw new BadRequestException('We could not resume deep research. Please start a new run.');
+      }
     }
 
     const subject = new ReplaySubject<DeepResearchStreamPayload>(DEEP_RESEARCH_RUN_BUFFER_SIZE);
@@ -1316,14 +1433,59 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       cleanupTimer: null,
       promise: null,
       responseId: null,
+      lockToken: null,
+      leader: false,
+      streamCursor: null,
+      tailTask: null,
     };
 
     this.deepResearchRuns.set(key, run);
 
-    run.promise = this.executeDeepResearchRun({ run, userId, baselineJob, subject }).catch((error) => {
-      this.logger.error(`Deep research run encountered an unhandled error: ${(error as Error)?.message ?? error}`);
-      subject.error(error);
-    });
+    const lockToken = await this.runStore.acquireRunLock('deep-research', key, DEEP_RESEARCH_RUN_TTL_MS);
+    if (lockToken) {
+      run.leader = true;
+      run.lockToken = lockToken;
+      run.streamCursor = '0-0';
+
+      await this.runStore.clearRun('deep-research', key);
+      await this.runStore.setMetadata(
+        'deep-research',
+        key,
+        { status: 'running', responseId: null, updatedAt: Date.now() },
+        DEEP_RESEARCH_RUN_TTL_MS,
+      );
+
+      run.promise = this.executeDeepResearchRun({ run, userId, baselineJob, subject })
+        .catch((error) => {
+          this.logger.error(`Deep research run encountered an unhandled error: ${(error as Error)?.message ?? error}`);
+          subject.error(error);
+        })
+        .finally(async () => {
+          await this.runStore.releaseRunLock('deep-research', key, run.lockToken);
+          await this.runStore.applyTtl('deep-research', key, DEEP_RESEARCH_RUN_TTL_MS);
+        });
+
+      return run;
+    }
+
+    const { metadata, entries } = await loadStoredState();
+    this.applyDeepResearchRunMetadata(run, metadata);
+    await this.emitStoredDeepResearchEvents(run, entries);
+    await this.runStore.applyTtl('deep-research', key, DEEP_RESEARCH_RUN_TTL_MS);
+
+    if (options?.restart) {
+      throw new BadRequestException('Deep research is already running. Please wait for it to finish.');
+    }
+
+    if (run.status === 'running') {
+      run.tailTask = this.tailDeepResearchRunStream(run).catch((error) => {
+        this.logger.warn(
+          `[writing-desk research] Failed to follow run ${run.key}: ${(error as Error)?.message ?? error}`,
+        );
+      });
+    } else {
+      this.scheduleRunCleanup(run);
+    }
 
     return run;
   }
@@ -1363,11 +1525,11 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       }
     };
 
-    const send = (payload: DeepResearchStreamPayload) => {
-      subject.next(payload);
+    const send = async (payload: DeepResearchStreamPayload) => {
+      await this.publishDeepResearchPayload(run, payload);
     };
 
-    const pushDelta = (next: string | null | undefined) => {
+    const pushDelta = async (next: string | null | undefined) => {
       if (typeof next !== 'string') return;
       if (next.length <= aggregatedText.length) {
         aggregatedText = next;
@@ -1376,7 +1538,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       const incremental = next.slice(aggregatedText.length);
       aggregatedText = next;
       if (incremental.length > 0) {
-        send({ type: 'delta', text: incremental });
+        await send({ type: 'delta', text: incremental });
       }
     };
 
@@ -1390,13 +1552,13 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       );
     }
 
-    send({ type: 'status', status: 'starting' });
+    await send({ type: 'status', status: 'starting' });
 
     try {
       const { credits } = await this.userCredits.deductFromMine(userId, DEEP_RESEARCH_CREDIT_COST);
       deductionApplied = true;
       remainingCredits = credits;
-      send({ type: 'status', status: 'charged', remainingCredits: credits });
+      await send({ type: 'status', status: 'charged', remainingCredits: credits });
 
       const apiKey = this.config.get<string>('OPENAI_API_KEY');
       const model = this.config.get<string>('OPENAI_DEEP_RESEARCH_MODEL')?.trim() || 'o4-mini-deep-research';
@@ -1404,7 +1566,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       if (!apiKey) {
         const stub = this.buildDeepResearchStub(baselineJob, { mpName });
         for (const chunk of stub.chunks) {
-          send({ type: 'delta', text: chunk });
+          await send({ type: 'delta', text: chunk });
           await this.delay(180);
         }
         await this.persistDeepResearchResult(userId, baselineJob, {
@@ -1414,7 +1576,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         });
         run.status = 'completed';
         _settled = true;
-        send({
+        await send({
           type: 'complete',
           content: stub.content,
           responseId: 'dev-stub',
@@ -1507,7 +1669,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
             lastCustomMessages.shift();
           }
           
-          send({ type: 'event', event: { type: 'quiet_period', message: randomMessage } });
+          await send({ type: 'event', event: { type: 'quiet_period', message: randomMessage } });
           _lastActivityTime = Date.now();
           startQuietPeriodTimer(); // Reset the timer
         }, 5000); // 5 seconds of inactivity
@@ -1540,28 +1702,28 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
 
             switch (event.type) {
               case 'response.created':
-                send({ type: 'status', status: 'queued' });
+                await send({ type: 'status', status: 'queued' });
                 break;
               case 'response.queued':
-                send({ type: 'status', status: 'queued' });
+                await send({ type: 'status', status: 'queued' });
                 break;
               case 'response.in_progress':
-                send({ type: 'status', status: 'in_progress' });
+                await send({ type: 'status', status: 'in_progress' });
                 break;
               case 'response.output_text.delta': {
                 const snapshot = (event as any)?.snapshot;
                 if (typeof snapshot === 'string' && snapshot.length > aggregatedText.length) {
-                  pushDelta(snapshot);
+                  await pushDelta(snapshot);
                   break;
                 }
                 if (typeof event.delta === 'string' && event.delta.length > 0) {
-                  pushDelta(aggregatedText + event.delta);
+                  await pushDelta(aggregatedText + event.delta);
                 }
                 break;
               }
               case 'response.output_text.done':
                 if (typeof event.text === 'string' && event.text.length > 0) {
-                  pushDelta(event.text);
+                  await pushDelta(event.text);
                 }
                 break;
               case 'response.web_search_call.searching':
@@ -1580,7 +1742,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
               case 'response.reasoning_summary_part.done':
               case 'response.reasoning_summary_text.delta':
               case 'response.reasoning_summary_text.done':
-                send({ type: 'event', event: this.normaliseStreamEvent(event) });
+                await send({ type: 'event', event: this.normaliseStreamEvent(event) });
                 break;
               case 'response.failed':
               case 'response.incomplete': {
@@ -1611,7 +1773,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
                 );
                 run.status = 'completed';
                 _settled = true;
-                send({
+                await send({
                   type: 'complete',
                   content: finalText,
                   responseId: resolvedResponseId,
@@ -1622,7 +1784,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
                 return;
               }
               default:
-                send({ type: 'event', event: this.normaliseStreamEvent(event) });
+                await send({ type: 'event', event: this.normaliseStreamEvent(event) });
             }
           }
           break;
@@ -1685,7 +1847,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         ];
         
         const randomMessage = resumeStatusMessages[Math.floor(Math.random() * resumeStatusMessages.length)];
-        send({ type: 'event', event: { type: 'resume_attempt', message: randomMessage, attempt: resumeAttempts } });
+        await send({ type: 'event', event: { type: 'resume_attempt', message: randomMessage, attempt: resumeAttempts } });
 
         try {
           const resumeParams: {
@@ -1730,7 +1892,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
 
         if (finalStatus === 'completed') {
           const finalText = this.extractFirstText(finalResponse) ?? aggregatedText;
-          pushDelta(finalText);
+          await pushDelta(finalText);
           await this.persistDeepResearchResult(userId, baselineJob, {
             content: finalText,
             responseId,
@@ -1748,7 +1910,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           );
           run.status = 'completed';
           _settled = true;
-          send({
+          await send({
             type: 'complete',
             content: finalText,
             responseId,
@@ -1764,7 +1926,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           });
           run.status = 'error';
           _settled = true;
-          send({ type: 'error', message, remainingCredits });
+          await send({ type: 'error', message, remainingCredits });
           subject.complete();
         }
       }
@@ -1802,7 +1964,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
           ? error.message
           : 'Deep research failed. Please try again in a few moments.';
 
-      send({
+      await send({
         type: 'error',
         message,
         remainingCredits,
@@ -1825,6 +1987,18 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         }
       }
 
+      await this.runStore.setMetadata(
+        'deep-research',
+        run.key,
+        {
+          status: run.status,
+          responseId: run.responseId,
+          remainingCredits,
+          updatedAt: Date.now(),
+        },
+        DEEP_RESEARCH_RUN_TTL_MS,
+      );
+
       this.scheduleRunCleanup(run);
     }
   }
@@ -1844,6 +2018,188 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
       (timer as any).unref();
     }
     run.cleanupTimer = timer as NodeJS.Timeout;
+  }
+
+  private subjectIsClosed<T>(subject: ReplaySubject<T>): boolean {
+    const anySubject = subject as any;
+    return anySubject?.closed === true || anySubject?.isStopped === true;
+  }
+
+  private completeSubject<T>(subject: ReplaySubject<T>) {
+    if (!this.subjectIsClosed(subject)) {
+      subject.complete();
+    }
+  }
+
+  private applyLetterRunMetadata(run: LetterRun, metadata: AiRunMetadata | null) {
+    if (!metadata) {
+      return;
+    }
+
+    if (metadata.status) {
+      run.status = metadata.status;
+    }
+
+    if (typeof metadata.responseId === 'string' || metadata.responseId === null) {
+      run.responseId = metadata.responseId ?? null;
+    }
+
+    if (typeof metadata.remainingCredits === 'number' || metadata.remainingCredits === null) {
+      run.remainingCredits = metadata.remainingCredits ?? null;
+    }
+  }
+
+  private applyDeepResearchRunMetadata(run: DeepResearchRun, metadata: AiRunMetadata | null) {
+    if (!metadata) {
+      return;
+    }
+
+    if (metadata.status) {
+      run.status = metadata.status;
+    }
+
+    if (typeof metadata.responseId === 'string' || metadata.responseId === null) {
+      run.responseId = metadata.responseId ?? null;
+    }
+  }
+
+  private handleLetterRunPayload(run: LetterRun, payload: LetterStreamPayload) {
+    if (payload.type === 'complete') {
+      run.status = 'completed';
+      run.remainingCredits =
+        typeof payload.remainingCredits === 'number' ? payload.remainingCredits : run.remainingCredits;
+      this.completeSubject(run.subject);
+    } else if (payload.type === 'error') {
+      run.status = 'error';
+      run.remainingCredits =
+        typeof payload.remainingCredits === 'number' ? payload.remainingCredits : run.remainingCredits;
+      this.completeSubject(run.subject);
+    }
+  }
+
+  private handleDeepResearchPayload(run: DeepResearchRun, payload: DeepResearchStreamPayload) {
+    if (payload.type === 'complete') {
+      run.status = 'completed';
+      this.completeSubject(run.subject);
+    } else if (payload.type === 'error') {
+      run.status = 'error';
+      this.completeSubject(run.subject);
+    }
+  }
+
+  private async publishLetterRunPayload(run: LetterRun, payload: LetterStreamPayload): Promise<void> {
+    run.subject.next(payload);
+    await this.runStore.appendStreamEvent('letter', run.key, payload, LETTER_RUN_TTL_MS);
+    await this.runStore.refreshRunLock('letter', run.key, run.lockToken, LETTER_RUN_TTL_MS);
+    this.handleLetterRunPayload(run, payload);
+  }
+
+  private async publishDeepResearchPayload(
+    run: DeepResearchRun,
+    payload: DeepResearchStreamPayload,
+  ): Promise<void> {
+    run.subject.next(payload);
+    await this.runStore.appendStreamEvent('deep-research', run.key, payload, DEEP_RESEARCH_RUN_TTL_MS);
+    await this.runStore.refreshRunLock('deep-research', run.key, run.lockToken, DEEP_RESEARCH_RUN_TTL_MS);
+    this.handleDeepResearchPayload(run, payload);
+  }
+
+  private async emitStoredLetterEvents(
+    run: LetterRun,
+    entries: Array<AiRunStreamEntry<LetterStreamPayload>>,
+  ): Promise<void> {
+    if (entries.length === 0) {
+      if (!run.streamCursor) {
+        run.streamCursor = '0-0';
+      }
+      return;
+    }
+
+    for (const entry of entries) {
+      run.streamCursor = entry.id;
+      run.subject.next(entry.payload);
+      this.handleLetterRunPayload(run, entry.payload);
+    }
+  }
+
+  private async emitStoredDeepResearchEvents(
+    run: DeepResearchRun,
+    entries: Array<AiRunStreamEntry<DeepResearchStreamPayload>>,
+  ): Promise<void> {
+    if (entries.length === 0) {
+      if (!run.streamCursor) {
+        run.streamCursor = '0-0';
+      }
+      return;
+    }
+
+    for (const entry of entries) {
+      run.streamCursor = entry.id;
+      run.subject.next(entry.payload);
+      this.handleDeepResearchPayload(run, entry.payload);
+    }
+  }
+
+  private async tailLetterRunStream(run: LetterRun): Promise<void> {
+    let cursor = run.streamCursor ?? '0-0';
+
+    while (this.letterRuns.get(run.key) === run && run.status === 'running' && !this.subjectIsClosed(run.subject)) {
+      const entries = await this.runStore.readStreamFrom<LetterStreamPayload>(
+        'letter',
+        run.key,
+        cursor,
+        RUN_STREAM_BLOCK_MS,
+      );
+
+      if (entries.length === 0) {
+        await this.delay(RUN_STREAM_IDLE_DELAY_MS);
+        continue;
+      }
+
+      for (const entry of entries) {
+        cursor = entry.id;
+        run.streamCursor = cursor;
+        run.subject.next(entry.payload);
+        this.handleLetterRunPayload(run, entry.payload);
+
+        if (run.status !== 'running' || this.subjectIsClosed(run.subject)) {
+          return;
+        }
+      }
+
+      await this.runStore.applyTtl('letter', run.key, LETTER_RUN_TTL_MS);
+    }
+  }
+
+  private async tailDeepResearchRunStream(run: DeepResearchRun): Promise<void> {
+    let cursor = run.streamCursor ?? '0-0';
+
+    while (this.deepResearchRuns.get(run.key) === run && run.status === 'running' && !this.subjectIsClosed(run.subject)) {
+      const entries = await this.runStore.readStreamFrom<DeepResearchStreamPayload>(
+        'deep-research',
+        run.key,
+        cursor,
+        RUN_STREAM_BLOCK_MS,
+      );
+
+      if (entries.length === 0) {
+        await this.delay(RUN_STREAM_IDLE_DELAY_MS);
+        continue;
+      }
+
+      for (const entry of entries) {
+        cursor = entry.id;
+        run.streamCursor = cursor;
+        run.subject.next(entry.payload);
+        this.handleDeepResearchPayload(run, entry.payload);
+
+        if (run.status !== 'running' || this.subjectIsClosed(run.subject)) {
+          return;
+        }
+      }
+
+      await this.runStore.applyTtl('deep-research', run.key, DEEP_RESEARCH_RUN_TTL_MS);
+    }
   }
 
   private async waitForBackgroundResponseCompletion(client: any, responseId: string) {

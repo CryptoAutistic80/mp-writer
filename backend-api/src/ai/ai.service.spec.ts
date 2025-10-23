@@ -6,6 +6,17 @@ import { UserMpService } from '../user-mp/user-mp.service';
 import { UsersService } from '../users/users.service';
 import { UserAddressService } from '../user-address-store/user-address.service';
 import { ActiveWritingDeskJobResource } from '../writing-desk-jobs/writing-desk-jobs.types';
+import { AiRunStore } from './ai-run.store';
+
+type CreateServiceOptions = {
+  configGet: (key: string) => string | null | undefined;
+  userCredits?: Partial<UserCreditsService>;
+  writingDeskJobs?: Partial<WritingDeskJobsService>;
+  userMp?: Partial<UserMpService>;
+  users?: Partial<UsersService>;
+  userAddress?: Partial<UserAddressService>;
+  runStore?: Partial<AiRunStore>;
+};
 
 describe('AiService', () => {
   const createService = ({
@@ -15,14 +26,8 @@ describe('AiService', () => {
     userMp,
     users,
     userAddress,
-  }: {
-    configGet: (key: string) => string | null | undefined;
-    userCredits?: Partial<UserCreditsService>;
-    writingDeskJobs?: Partial<WritingDeskJobsService>;
-    userMp?: Partial<UserMpService>;
-    users?: Partial<UsersService>;
-    userAddress?: Partial<UserAddressService>;
-  }) => {
+    runStore,
+  }: CreateServiceOptions) => {
     const config = { get: jest.fn((key: string) => configGet(key)) } as unknown as ConfigService;
     const credits = {
       deductFromMine: jest.fn().mockResolvedValue({ credits: 10 }),
@@ -37,10 +42,23 @@ describe('AiService', () => {
     const mp = { ...userMp } as unknown as UserMpService;
     const usersService = { ...users } as unknown as UsersService;
     const address = { ...userAddress } as unknown as UserAddressService;
+    const store = {
+      acquireRunLock: jest.fn().mockResolvedValue(null),
+      clearRun: jest.fn().mockResolvedValue(undefined),
+      setMetadata: jest.fn().mockResolvedValue(undefined),
+      appendStreamEvent: jest.fn().mockResolvedValue('0-0'),
+      refreshRunLock: jest.fn().mockResolvedValue(undefined),
+      getMetadata: jest.fn().mockResolvedValue(null),
+      getStreamEntries: jest.fn().mockResolvedValue([]),
+      applyTtl: jest.fn().mockResolvedValue(undefined),
+      readStreamFrom: jest.fn().mockResolvedValue([]),
+      releaseRunLock: jest.fn().mockResolvedValue(undefined),
+      ...runStore,
+    } as unknown as AiRunStore;
 
     return {
-      service: new AiService(config, credits, jobs, mp, usersService, address),
-      dependencies: { config, credits, jobs, mp, usersService, address },
+      service: new AiService(config, credits, jobs, mp, usersService, address, store),
+      dependencies: { config, credits, jobs, mp, usersService, address, store },
     };
   };
 
