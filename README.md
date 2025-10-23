@@ -5,8 +5,9 @@ Project skeleton generated with Nx (Next.js + NestJS) following the instructions
 Quick Start
 - Install Node.js 20+ and Docker
 - From the workspace root `mp-writer/`:
-  - Dev: First start MongoDB, then run backend and frontend in separate terminals:
-    - Terminal 1 (MongoDB): `docker compose up mongo`
+  - Dev: Start the data services, then run backend and frontend in separate terminals:
+    - Terminal 1 (MongoDB + Redis): `docker compose up mongo redis`
+      - See [docs/redis.md](docs/redis.md) for alternative Redis setups and env vars.
     - Terminal 2 (Backend): `PORT=4000 npx nx serve backend-api`
     - Terminal 3 (Frontend): `npx nx dev frontend` (runs on default port 3000)
   - Build: `npx nx build backend-api` and `npx nx build frontend`
@@ -17,6 +18,7 @@ Quick Start
 
 Environment
 - `MONGO_URI`: defaults to `mongodb://localhost:27017/mp_writer` when not set
+- `REDIS_URL`: required Redis connection string (e.g., `redis://localhost:6379/0`). Review [Redis operations](docs/redis.md) for guidance on connection limits and fallbacks.
 - `JWT_SECRET`: required for JWT issuance
 - `APP_ORIGIN`: frontend origin for CORS (e.g., `http://localhost:3000`)
 - Google OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
