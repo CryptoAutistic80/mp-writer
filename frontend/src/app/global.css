@@ -1238,6 +1238,32 @@ body {
 .result {
   margin-top: 0;
 }
+
+.credit-package__actions {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.credit-package__button {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+.credit-package__tooltip {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 600px) {
+  .credit-package__button {
+    flex: 1 1 0%;
+    min-width: 0;
+  }
+}
 .result-placeholder {
   background: #f8fafc;
   border: 1px dashed #e2e8f0;

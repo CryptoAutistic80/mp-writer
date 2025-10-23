@@ -193,16 +193,17 @@ export default function CreditShopPage() {
                         <p style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600 }}>
                           {formatPrice(pkg.amount, pkg.currency)}
                         </p>
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, marginTop: 'auto' }}>
+                        <div className="credit-package__actions">
                           <button
                             type="button"
-                            className="btn-primary"
+                            className="btn-primary credit-package__button"
                             onClick={() => handlePurchase(pkg.credits)}
                             disabled={state.status === 'loading'}
                           >
                             {isProcessing ? processingLabel : `Buy for ${formatPrice(pkg.amount, pkg.currency)}`}
                           </button>
                           <InfoTooltip
+                            className="credit-package__tooltip"
                             content={tooltipMessage}
                             label="How purchases work"
                             placement="top"
