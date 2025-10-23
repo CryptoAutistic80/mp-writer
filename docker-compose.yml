@@ -13,6 +13,18 @@ services:
       retries: 20
       start_period: 5s
 
+  redis:
+    image: redis:7
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
   backend-api:
     build:
       context: .
@@ -20,8 +32,11 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       - MONGO_URI=mongodb://mongo:27017/mp_writer
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
       - PORT=4000
       - APP_ORIGIN=http://localhost:3000
