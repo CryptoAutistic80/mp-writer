@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { RedisClientService } from '@mp-writer/nest-modules';
 
 interface LookupResult {
   constituency: string;
@@ -17,12 +18,74 @@ interface LookupResult {
 
 @Injectable()
 export class MpsService {
+  private static readonly CACHE_TTL_SECONDS = 60 * 60 * 24;
+
+  constructor(private readonly redisClientService: RedisClientService) {}
+
   private normalizePostcode(input: string): string {
     return input.replace(/\s+/g, '').toUpperCase();
   }
 
+  private getCacheKey(postcode: string): string {
+    return `mps:lookup:${postcode}`;
+  }
+
+  private shouldInvalidateCache(_payload: LookupResult): boolean {
+    // Placeholder for future freshness rules.
+    return false;
+  }
+
+  private async invalidateCache(key: string): Promise<void> {
+    try {
+      await this.redisClientService.getClient().del(key);
+    } catch {
+      // Ignore cache invalidation failures
+    }
+  }
+
+  private async readCache(postcode: string): Promise<LookupResult | null> {
+    const key = this.getCacheKey(postcode);
+    try {
+      const cached = await this.redisClientService.getClient().get(key);
+      if (!cached) {
+        return null;
+      }
+
+      const payload: LookupResult = JSON.parse(cached);
+      if (this.shouldInvalidateCache(payload)) {
+        await this.invalidateCache(key);
+        return null;
+      }
+
+      return payload;
+    } catch {
+      return null;
+    }
+  }
+
+  private async writeCache(postcode: string, payload: LookupResult): Promise<void> {
+    const key = this.getCacheKey(postcode);
+    if (this.shouldInvalidateCache(payload)) {
+      await this.invalidateCache(key);
+      return;
+    }
+
+    try {
+      await this.redisClientService
+        .getClient()
+        .set(key, JSON.stringify(payload), 'EX', MpsService.CACHE_TTL_SECONDS);
+    } catch {
+      // Ignore cache write failures
+    }
+  }
+
   async lookupByPostcode(postcodeRaw: string): Promise<LookupResult> {
     const postcode = this.normalizePostcode(postcodeRaw);
+
+    const cached = await this.readCache(postcode);
+    if (cached) {
+      return cached;
+    }
 
     // First: fetch constituency via postcodes.io
     const pcRes = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(postcode)}`);
@@ -170,6 +233,9 @@ export class MpsService {
       mp = { id, name, party, portraitUrl, since, email, twitter, website, parliamentaryAddress };
     }
 
-    return { constituency, mp };
+    const result: LookupResult = { constituency, mp };
+    await this.writeCache(postcode, result);
+
+    return result;
   }
 }
