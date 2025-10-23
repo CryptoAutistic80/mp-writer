@@ -32,6 +32,33 @@ export function InfoTooltip({
   const bubbleRef = useRef<HTMLSpanElement | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const [alignment, setAlignment] = useState<'center' | 'start' | 'end'>('center');
+  const [isCoarsePointer, setIsCoarsePointer] = useState(false);
+  const [resolvedPlacement, setResolvedPlacement] = useState(placement);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(hover: none), (pointer: coarse)');
+    const updatePointerState = () => {
+      setIsCoarsePointer(mediaQuery.matches);
+    };
+
+    updatePointerState();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', updatePointerState);
+      return () => {
+        mediaQuery.removeEventListener('change', updatePointerState);
+      };
+    }
+
+    mediaQuery.addListener(updatePointerState);
+    return () => {
+      mediaQuery.removeListener(updatePointerState);
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -60,11 +87,25 @@ export function InfoTooltip({
 
   const visible = hoverVisible || touchVisible;
 
+  const basePlacement = useMemo(() => {
+    if (isCoarsePointer && (placement === 'left' || placement === 'right')) {
+      return 'bottom';
+    }
+    return placement;
+  }, [isCoarsePointer, placement]);
+
   useEffect(() => {
     if (!visible) {
       setAlignment('center');
+      setResolvedPlacement(basePlacement);
     }
-  }, [visible]);
+  }, [visible, basePlacement]);
+
+  useEffect(() => {
+    if (visible) {
+      setResolvedPlacement((current) => (current === basePlacement ? current : basePlacement));
+    }
+  }, [basePlacement, visible]);
 
   useLayoutEffect(() => {
     if (!visible || typeof window === 'undefined') return;
@@ -76,7 +117,24 @@ export function InfoTooltip({
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
       let next: 'center' | 'start' | 'end' = 'center';
-      if (placement === 'left' || placement === 'right') {
+      let nextPlacement = resolvedPlacement;
+
+      if (resolvedPlacement === 'top' && rect.top < 12) {
+        nextPlacement = 'bottom';
+      } else if (resolvedPlacement === 'bottom' && rect.bottom > viewportHeight - 12) {
+        nextPlacement = 'top';
+      } else if (resolvedPlacement === 'left' && rect.left < 12) {
+        nextPlacement = 'right';
+      } else if (resolvedPlacement === 'right' && rect.right > viewportWidth - 12) {
+        nextPlacement = 'left';
+      }
+
+      if (nextPlacement !== resolvedPlacement) {
+        setResolvedPlacement(nextPlacement);
+        return;
+      }
+
+      if (resolvedPlacement === 'left' || resolvedPlacement === 'right') {
         if (rect.top < 12) next = 'start';
         else if (rect.bottom > viewportHeight - 12) next = 'end';
       } else {
@@ -93,7 +151,7 @@ export function InfoTooltip({
       window.cancelAnimationFrame(frame);
       window.removeEventListener('resize', handleResize);
     };
-  }, [visible, placement]);
+  }, [visible, resolvedPlacement, basePlacement]);
 
   const resolvedTrigger = trigger ?? (
     <span className="info-tooltip__icon" aria-hidden="true">i</span>
@@ -147,7 +205,7 @@ export function InfoTooltip({
         ref={bubbleRef}
         id={tooltipId}
         role="tooltip"
-        className={`info-tooltip__bubble info-tooltip__bubble--${placement}`}
+        className={`info-tooltip__bubble info-tooltip__bubble--${resolvedPlacement}`}
         data-state={visible ? 'visible' : 'hidden'}
         data-align={alignment}
       >
