@@ -324,6 +324,160 @@ describe('AiService', () => {
 
       expect(dependencies.credits.deductFromMine).toHaveBeenCalledWith('user-1', expect.any(Number));
     });
+
+    it('replays cached events when reconnecting to an existing letter run', async () => {
+      const activeJob = createActiveJob({ letterTone: 'formal' });
+      const completePayload = {
+        type: 'complete' as const,
+        letter: {
+          mpName: 'Canonical MP',
+          mpAddress1: 'Line 1',
+          mpAddress2: 'Line 2',
+          mpCity: 'Town',
+          mpCounty: 'County',
+          mpPostcode: 'AB1 2CD',
+          date: '2025-01-15',
+          subjectLineHtml: '<p>Subject</p>',
+          letterContent: '<p>Body</p>',
+          senderName: 'Constituent',
+          senderAddress1: 'Sender Line 1',
+          senderAddress2: 'Sender Line 2',
+          senderAddress3: 'Sender Line 3',
+          senderCity: 'Sender Town',
+          senderCounty: 'Sender County',
+          senderPostcode: 'ZX9 9XZ',
+          senderTelephone: '020 7946 0123',
+          references: [],
+          responseId: 'resp-1',
+          tone: 'formal',
+          rawJson: '{}',
+        },
+        remainingCredits: 2,
+      };
+
+      const storedEntries = [
+        { id: '0-1', payload: { type: 'status' as const, status: 'running', remainingCredits: 3 } },
+        { id: '0-2', payload: { type: 'delta' as const, text: 'First chunk' } },
+        { id: '0-3', payload: completePayload },
+      ];
+
+      const { service, dependencies } = createService({
+        configGet: () => null,
+        writingDeskJobs: {
+          getActiveJobForUser: jest.fn().mockResolvedValue(activeJob),
+        },
+        runStore: {
+          acquireRunLock: jest.fn().mockResolvedValue(null),
+          getMetadata: jest
+            .fn()
+            .mockResolvedValue({ status: 'completed', responseId: 'resp-1', remainingCredits: 2, updatedAt: Date.now() }),
+          getStreamEntries: jest.fn().mockResolvedValue(storedEntries),
+          applyTtl: jest.fn().mockResolvedValue(undefined),
+        },
+      });
+
+      const messageStream = service.streamWritingDeskLetter('user-1', {
+        jobId: activeJob.jobId,
+        resume: true,
+      });
+
+      const received: Array<Record<string, unknown>> = [];
+
+      await new Promise<void>((resolve, reject) => {
+        const subscription = messageStream.subscribe({
+          next: (event) => {
+            received.push(JSON.parse(String(event.data)));
+          },
+          error: (error) => {
+            reject(error);
+          },
+          complete: () => {
+            subscription.unsubscribe();
+            resolve();
+          },
+        });
+      });
+
+      expect(received).toEqual(storedEntries.map((entry) => entry.payload));
+      expect(dependencies.runStore.getMetadata).toHaveBeenCalledWith('letter', 'user-1::job-123');
+      expect(dependencies.runStore.getStreamEntries).toHaveBeenCalledWith('letter', 'user-1::job-123');
+      expect(dependencies.runStore.applyTtl).toHaveBeenCalledWith('letter', 'user-1::job-123', 5 * 60 * 1000);
+    });
+
+    it('releases the run lock once a leader completes the letter run', async () => {
+      const activeJob = createActiveJob({ letterTone: 'formal' });
+      const completePayload = {
+        type: 'complete' as const,
+        letter: {
+          mpName: 'Canonical MP',
+          mpAddress1: 'Line 1',
+          mpAddress2: 'Line 2',
+          mpCity: 'Town',
+          mpCounty: 'County',
+          mpPostcode: 'AB1 2CD',
+          date: '2025-01-15',
+          subjectLineHtml: '<p>Subject</p>',
+          letterContent: '<p>Body</p>',
+          senderName: 'Constituent',
+          senderAddress1: 'Sender Line 1',
+          senderAddress2: 'Sender Line 2',
+          senderAddress3: 'Sender Line 3',
+          senderCity: 'Sender Town',
+          senderCounty: 'Sender County',
+          senderPostcode: 'ZX9 9XZ',
+          senderTelephone: '020 7946 0123',
+          references: [],
+          responseId: 'resp-1',
+          tone: 'formal',
+          rawJson: '{}',
+        },
+        remainingCredits: 2,
+      };
+
+      const { service, dependencies } = createService({
+        configGet: () => null,
+        writingDeskJobs: {
+          getActiveJobForUser: jest.fn().mockResolvedValue(activeJob),
+          upsertActiveJob: jest.fn().mockResolvedValue(activeJob),
+        },
+        runStore: {
+          acquireRunLock: jest.fn().mockResolvedValue('leader-token'),
+          clearRun: jest.fn().mockResolvedValue(undefined),
+          setMetadata: jest.fn().mockResolvedValue(undefined),
+          appendStreamEvent: jest.fn().mockResolvedValue('0-1'),
+          refreshRunLock: jest.fn().mockResolvedValue(undefined),
+          releaseRunLock: jest.fn().mockResolvedValue(undefined),
+          applyTtl: jest.fn().mockResolvedValue(undefined),
+        },
+      });
+
+      const executeSpy = jest
+        .spyOn(service as any, 'executeLetterRun')
+        .mockImplementation(async ({ run }: { run: any }) => {
+          await (service as any).publishLetterRunPayload(run, completePayload);
+        });
+
+      const run = await (service as any).beginLetterRun('user-1', activeJob.jobId, { tone: 'formal', createIfMissing: true });
+      await run.promise;
+
+      executeSpy.mockRestore();
+
+      expect(dependencies.runStore.appendStreamEvent).toHaveBeenCalledWith(
+        'letter',
+        'user-1::job-123',
+        completePayload,
+        5 * 60 * 1000,
+      );
+      expect(dependencies.runStore.refreshRunLock).toHaveBeenCalledWith(
+        'letter',
+        'user-1::job-123',
+        'leader-token',
+        5 * 60 * 1000,
+      );
+      expect(dependencies.runStore.releaseRunLock).toHaveBeenCalledWith('letter', 'user-1::job-123', 'leader-token');
+      expect(dependencies.runStore.applyTtl).toHaveBeenCalledWith('letter', 'user-1::job-123', 5 * 60 * 1000);
+      expect(run.status).toBe('completed');
+    });
   });
 
   describe('error logging', () => {
