@@ -1026,7 +1026,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         if (quietPeriodTimer) {
           clearTimeout(quietPeriodTimer);
         }
-        quietPeriodTimer = setTimeout(() => {
+        quietPeriodTimer = setTimeout(async () => {
           const quietStatusMessages = [
             'Drafting a persuasive opening…',
             'Cross-referencing your evidence with parliamentary procedures…',
@@ -1619,7 +1619,7 @@ Do NOT ask for documents, permissions, names, addresses, or personal details. On
         if (quietPeriodTimer) {
           clearTimeout(quietPeriodTimer);
         }
-        quietPeriodTimer = setTimeout(() => {
+        quietPeriodTimer = setTimeout(async () => {
           const quietStatusMessages = [
             'Taking a moment to absorb the evidence…',
             'Processing the information through my democratic filters…',

@@ -24,8 +24,6 @@ import { WritingDeskJobsModule } from '../writing-desk-jobs/writing-desk-jobs.mo
 import { CheckoutModule } from '../checkout/checkout.module';
 import { UserSavedLettersModule } from '../user-saved-letters/user-saved-letters.module';
 
-const THROTTLER_STORAGE_TOKEN = 'THROTTLER_STORAGE_REDIS';
-
 function validateConfig(config: Record<string, unknown>) {
   const errors: string[] = [];
 
@@ -82,10 +80,10 @@ function validateConfig(config: Record<string, unknown>) {
     RedisModule,
     ThrottlerModule.forRootAsync({
       imports: [RedisModule],
-      inject: [THROTTLER_STORAGE_TOKEN],
-      useFactory: (storage: ThrottlerStorageRedisService) => ({
+      inject: [RedisClientService],
+      useFactory: (redisClientService: RedisClientService) => ({
         throttlers: [{ ttl: 60, limit: 60 }],
-        storage,
+        storage: new ThrottlerStorageRedisService(redisClientService.getClient()),
       }),
     }),
     MongooseModule.forRootAsync({
@@ -111,16 +109,6 @@ function validateConfig(config: Record<string, unknown>) {
   controllers: [AppController, HealthController],
   providers: [
     AppService,
-    {
-      provide: THROTTLER_STORAGE_TOKEN,
-      inject: [RedisClientService],
-      useFactory: (redisClientService: RedisClientService) =>
-        new ThrottlerStorageRedisService(redisClientService.getClient()),
-    },
-    {
-      provide: ThrottlerStorageRedisService,
-      useExisting: THROTTLER_STORAGE_TOKEN,
-    },
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

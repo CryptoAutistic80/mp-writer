@@ -14,9 +14,8 @@ import { RedisClientService } from './redis-client.service';
         }
 
         return {
-          config: {
-            url,
-          },
+          type: 'single',
+          url,
         };
       },
     }),
